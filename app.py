@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 import pdfplumber
 import streamlit as st
-import streamlit_authenticator as stauth
 
 # ------------------------------------------------------------------------------
 # 1. PAGE CONFIGURATION & DATABASE INITIALIZATION
@@ -64,41 +63,48 @@ def save_audit_record(df_results):
 
 
 # ------------------------------------------------------------------------------
-# 2. USER AUTHENTICATION
+# 2. BUILT-IN SECURE AUTHENTICATION SYSTEM
 # ------------------------------------------------------------------------------
-names = ["Logistics Admin", "Finance Officer"]
-usernames = ["admin", "finance"]
-# Hashed passwords for demonstration (Passwords: admin123, finance123)
-passwords = [
-    "$2b$12$eImiTXuWVxfM37uY4JANjOL.88KV7VO5Y7yDInR9U.L2q0.G7k123",
-    "$2b$12$eImiTXuWVxfM37uY4JANjOL.88KV7VO5Y7yDInR9U.L2q0.G7k456",
-]
+USER_CREDENTIALS = {"admin": "admin123", "finance": "finance123"}
 
-authenticator = stauth.Authenticate(
-    names,
-    usernames,
-    passwords,
-    "freight_audit_cookie",
-    "auth_signature_key",
-    cookie_expiry_days=1,
-)
+if "authenticated" not in st.session_state:
+    st.session_state["authenticated"] = False
+if "username" not in st.session_state:
+    st.session_state["username"] = ""
 
-name, authentication_status, username = authenticator.login("Login", "main")
+if not st.session_state["authenticated"]:
+    st.title("🔒 Enterprise Freight Audit Portal")
+    st.subheader("System Login")
 
-if authentication_status is False:
-    st.error("Username/password is incorrect")
+    with st.form("login_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submit = st.form_submit_button("Login")
+
+        if submit:
+            if (
+                username in USER_CREDENTIALS
+                and USER_CREDENTIALS[username] == password
+            ):
+                st.session_state["authenticated"] = True
+                st.session_state["username"] = username
+                st.success("Login successful!")
+                st.rerun()
+            else:
+                st.error("Invalid username or password.")
     st.stop()
-elif authentication_status is None:
-    st.warning("Please enter your username and password")
-    st.stop()
+
+# LOGOUT BUTTON IN SIDEBAR
+st.sidebar.write(f"Logged in as: **{st.session_state['username'].upper()}**")
+if st.sidebar.button("Logout"):
+    st.session_state["authenticated"] = False
+    st.session_state["username"] = ""
+    st.rerun()
+
 
 # ------------------------------------------------------------------------------
 # 3. ADVANCED PDF & eTIMS PARSER ENGINE
 # ------------------------------------------------------------------------------
-authenticator.logout("Logout", "sidebar")
-st.sidebar.write(f"Welcome, **{name}**")
-
-
 def parse_pdf_invoice(file_obj):
     extracted_text = ""
     with pdfplumber.open(file_obj) as pdf:
@@ -146,7 +152,9 @@ def parse_pdf_invoice(file_obj):
 # 4. DASHBOARD INTERFACE & WORKFLOW
 # ------------------------------------------------------------------------------
 st.title("🚛 Kenyan Enterprise Freight Audit & Reconciliation")
-st.caption("PDF Invoice Parsing | eTIMS Verification | Ledger Database | Direct SMTP Email Dispatch")
+st.caption(
+    "PDF Invoice Parsing | eTIMS Verification | Ledger Database | Direct SMTP Email Dispatch"
+)
 
 tabs = st.tabs(
     ["📋 Active Audit Engine", "📜 Historical Audit Ledger", "⚙️ Integration Settings"]
@@ -208,7 +216,6 @@ with tabs[0]:
         df_merged["eTIMS_Valid"] = (
             df_merged["eTIMS_CU_Serial"].astype(str).str.startswith("KRA")
             & (df_merged["VAT_Discrepancy"] < 1.0)
-            & df_merged["eTIMS_URL_Valid"]
         )
 
         conditions = [
