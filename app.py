@@ -174,20 +174,30 @@ with tabs[0]:
         invoice_records = [parse_pdf_invoice(pdf) for pdf in pdf_files]
         df_inv = pd.DataFrame(invoice_records)
 
-        df_rates = (
-            pd.read_csv(contract_file)
-            if contract_file.name.endswith(".csv")
-            else pd.read_excel(contract_file)
-        )
+       # Resilient CSV/Excel loader with encoding fallbacks
+        if contract_file.name.endswith(".csv"):
+            try:
+                df_rates = pd.read_csv(contract_file, encoding='utf-8')
+            except Exception:
+                df_rates = pd.read_csv(contract_file, encoding='latin1')
+        else:
+            df_rates = pd.read_excel(contract_file)
 
-        df_merged = pd.merge(df_inv, df_rates, on="Carrier", how="left").fillna(
-            0
-        )
+        # Standardize column headers dynamically
+        column_mapping = {
+            'Company_Name': 'Carrier',
+            'Contract_Rate_KES': 'Contract_Base',
+            'Billed_Rate_KES': 'Billed_Base'
+        }
+        df_rates = df_rates.rename(columns=column_mapping)
 
-        # Variances
-        df_merged["Base_Variance"] = np.maximum(
-            0, df_merged["Billed_Base"] - df_merged["Contract_Base"]
-        )
+        # Merge datasets cleanly
+        df_merged = pd.merge(df_inv, df_rates, on="Carrier", how="left").fillna(0)
+
+        # Calculate Base Variance safely
+        c_base = df_merged["Contract_Base"] if "Contract_Base" in df_merged.columns else 0
+        b_base = df_merged["Billed_Base"] if "Billed_Base" in df_merged.columns else 0
+        df_merged["Base_Variance"] = np.maximum(0, b_base - c_base)
         df_merged["Fuel_Variance"] = np.maximum(
             0, df_merged["Billed_Fuel"] - df_merged["Max_Fuel_Allowance"]
         )
