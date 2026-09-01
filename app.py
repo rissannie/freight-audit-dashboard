@@ -212,23 +212,22 @@ with tabs[0]:
     m_off = df_merged["Max_Offloading_Allowance"] if "Max_Offloading_Allowance" in df_merged.columns else 0
     df_merged["Offloading_Variance"] = np.maximum(0, b_off - m_off)
     
-       df_merged["Total_Overcharge"] = (
-         df_merged["Base_Variance"]
-         + df_merged["Fuel_Variance"]
-         + df_merged["Offloading_Variance"]
-     )
+      df_merged["Total_Overcharge"] = (
+        df_merged["Base_Variance"]
+        + df_merged["Fuel_Variance"]
+        + df_merged["Offloading_Variance"]
+    )
 
-        # eTIMS Tax Check
-        df_merged["Expected_Subtotal"] = (
-            df_merged["Contract_Base"]
-            + df_merged["Max_Fuel_Allowance"]
-            + df_merged["Max_Offloading_Allowance"]
-        )
+    # eTIMS Tax Check
+    df_merged["Expected_Subtotal"] = (
+        df_merged["Contract_Base"]
+        + df_merged["Max_Fuel_Allowance"]
+        + df_merged["Max_Offloading_Allowance"]
+    )
         df_merged["Expected_VAT"] = df_merged["Expected_Subtotal"] * 0.16
         df_merged["VAT_Discrepancy"] = np.abs(
             df_merged["Billed_VAT"] - df_merged["Expected_VAT"]
         )
-
         df_merged["eTIMS_Valid"] = (
             df_merged["eTIMS_CU_Serial"].astype(str).str.startswith("KRA")
             & (df_merged["VAT_Discrepancy"] < 1.0)
