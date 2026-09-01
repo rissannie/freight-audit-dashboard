@@ -217,6 +217,7 @@ with tabs[0]:
          + df_merged["Fuel_Variance"]
          + df_merged["Offloading_Variance"]
      )
+
         # eTIMS Tax Check
         df_merged["Expected_Subtotal"] = (
             df_merged["Contract_Base"]
