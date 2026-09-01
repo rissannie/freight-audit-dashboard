@@ -197,19 +197,20 @@ with tabs[0]:
         # Merge datasets cleanly
         df_merged = pd.merge(df_inv, df_rates, on="Carrier", how="left").fillna(0)
 
-        # Calculate Base Variance safely
-        c_base = df_merged["Contract_Base"] if "Contract_Base" in df_merged.columns else 0
-        b_base = df_merged["Billed_Base"] if "Billed_Base" in df_merged.columns else 0
-        df_merged["Base_Variance"] = np.maximum(0, b_base - c_base)
-       # Calculate Fuel Variance safely with fallbacks
+       # Calculate Base Variance safely
+    c_base = df_merged["Contract_Base"] if "Contract_Base" in df_merged.columns else 0
+    b_base = df_merged["Billed_Base"] if "Billed_Base" in df_merged.columns else 0
+    df_merged["Base_Variance"] = np.maximum(0, b_base - c_base)
+
+    # Calculate Fuel Variance safely with fallbacks
     b_fuel = df_merged["Billed_Fuel"] if "Billed_Fuel" in df_merged.columns else 0
     m_fuel = df_merged["Max_Fuel_Allowance"] if "Max_Fuel_Allowance" in df_merged.columns else 0
     df_merged["Fuel_Variance"] = np.maximum(0, b_fuel - m_fuel)
-        df_merged["Offloading_Variance"] = np.maximum(
-            0,
-            df_merged["Billed_Offloading"]
-            - df_merged["Max_Offloading_Allowance"],
-        )
+
+    # Calculate Offloading Variance safely with fallbacks
+    b_off = df_merged["Billed_Offloading"] if "Billed_Offloading" in df_merged.columns else 0
+    m_off = df_merged["Max_Offloading_Allowance"] if "Max_Offloading_Allowance" in df_merged.columns else 0
+    df_merged["Offloading_Variance"] = np.maximum(0, b_off - m_off)
         df_merged["Total_Overcharge"] = (
             df_merged["Base_Variance"]
             + df_merged["Fuel_Variance"]
