@@ -174,7 +174,7 @@ with tabs[0]:
         invoice_records = [parse_pdf_invoice(pdf) for pdf in pdf_files]
         df_inv = pd.DataFrame(invoice_records)
 
-       # Resilient CSV/Excel loader with pointer reset and encoding fallbacks
+        # Resilient CSV/Excel loader with pointer reset and encoding fallbacks
         if contract_file.name.endswith(".csv"):
             try:
                 contract_file.seek(0)
@@ -197,55 +197,55 @@ with tabs[0]:
         # Merge datasets cleanly
         df_merged = pd.merge(df_inv, df_rates, on="Carrier", how="left").fillna(0)
 
-       # Calculate Base Variance safely
-    c_base = df_merged["Contract_Base"] if "Contract_Base" in df_merged.columns else 0
-    b_base = df_merged["Billed_Base"] if "Billed_Base" in df_merged.columns else 0
-    df_merged["Base_Variance"] = np.maximum(0, b_base - c_base)
+        # Calculate Base Variance safely
+        c_base = df_merged["Contract_Base"] if "Contract_Base" in df_merged.columns else 0
+        b_base = df_merged["Billed_Base"] if "Billed_Base" in df_merged.columns else 0
+        df_merged["Base_Variance"] = np.maximum(0, b_base - c_base)
 
-    # Calculate Fuel Variance safely with fallbacks
-    b_fuel = df_merged["Billed_Fuel"] if "Billed_Fuel" in df_merged.columns else 0
-    m_fuel = df_merged["Max_Fuel_Allowance"] if "Max_Fuel_Allowance" in df_merged.columns else 0
-    df_merged["Fuel_Variance"] = np.maximum(0, b_fuel - m_fuel)
+        # Calculate Fuel Variance safely with fallbacks
+        b_fuel = df_merged["Billed_Fuel"] if "Billed_Fuel" in df_merged.columns else 0
+        m_fuel = df_merged["Max_Fuel_Allowance"] if "Max_Fuel_Allowance" in df_merged.columns else 0
+        df_merged["Fuel_Variance"] = np.maximum(0, b_fuel - m_fuel)
 
-    # Calculate Offloading Variance safely with fallbacks
-    b_off = df_merged["Billed_Offloading"] if "Billed_Offloading" in df_merged.columns else 0
-    m_off = df_merged["Max_Offloading_Allowance"] if "Max_Offloading_Allowance" in df_merged.columns else 0
-    df_merged["Offloading_Variance"] = np.maximum(0, b_off - m_off)
-    
-    df_merged["Total_Overcharge"] = (
-        df_merged["Base_Variance"]
-        + df_merged["Fuel_Variance"]
-        + df_merged["Offloading_Variance"]
-    )
+        # Calculate Offloading Variance safely with fallbacks
+        b_off = df_merged["Billed_Offloading"] if "Billed_Offloading" in df_merged.columns else 0
+        m_off = df_merged["Max_Offloading_Allowance"] if "Max_Offloading_Allowance" in df_merged.columns else 0
+        df_merged["Offloading_Variance"] = np.maximum(0, b_off - m_off)
 
-    # eTIMS Tax Check
-    df_merged["Expected_Subtotal"] = (
-        df_merged["Contract_Base"]
-        + df_merged["Max_Fuel_Allowance"]
-        + df_merged["Max_Offloading_Allowance"]
-    )
+        df_merged["Total_Overcharge"] = (
+            df_merged["Base_Variance"]
+            + df_merged["Fuel_Variance"]
+            + df_merged["Offloading_Variance"]
+        )
 
-    df_merged["Expected_VAT"] = df_merged["Expected_Subtotal"] * 0.16
-    df_merged["VAT_Discrepancy"] = np.abs(
-        df_merged["Billed_VAT"] - df_merged["Expected_VAT"]
-    )
+        # eTIMS Tax Check
+        df_merged["Expected_Subtotal"] = (
+            df_merged["Contract_Base"]
+            + df_merged["Max_Fuel_Allowance"]
+            + df_merged["Max_Offloading_Allowance"]
+        )
 
-    df_merged["eTIMS_Valid"] = (
-        df_merged["eTIMS_CU_Serial"].astype(str).str.startswith("KRA")
-        & (df_merged["VAT_Discrepancy"] < 1.0)
-    )
+        df_merged["Expected_VAT"] = df_merged["Expected_Subtotal"] * 0.16
+        df_merged["VAT_Discrepancy"] = np.abs(
+            df_merged["Billed_VAT"] - df_merged["Expected_VAT"]
+        )
 
-    conditions = [
+        df_merged["eTIMS_Valid"] = (
+            df_merged["eTIMS_CU_Serial"].astype(str).str.startswith("KRA")
+            & (df_merged["VAT_Discrepancy"] < 1.0)
+        )
+
+        conditions = [
             (df_merged["Total_Overcharge"] > 0) & (~df_merged["eTIMS_Valid"]),
             (df_merged["Total_Overcharge"] > 0),
             (~df_merged["eTIMS_Valid"]),
         ]
-    choices = [
+        choices = [
             "FLAGGED_OVERCHARGE_AND_ETIMS",
             "FLAGGED_RATE_OVERCHARGE",
             "FLAGGED_ETIMS_NON_COMPLIANT",
         ]
-    df_merged["Audit_Status"] = np.select(
+        df_merged["Audit_Status"] = np.select(
             conditions, choices, default="PASSED_VERIFIED"
         )
 
