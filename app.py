@@ -202,9 +202,9 @@ with tabs[0]:
         b_base = df_merged["Billed_Base"] if "Billed_Base" in df_merged.columns else 0
         df_merged["Base_Variance"] = np.maximum(0, b_base - c_base)
        # Calculate Fuel Variance safely with fallbacks
-     b_fuel = df_merged["Billed_Fuel"] if "Billed_Fuel" in df_merged.columns else 0
-     m_fuel = df_merged["Max_Fuel_Allowance"] if "Max_Fuel_Allowance" in df_merged.columns else 0
-     df_merged["Fuel_Variance"] = np.maximum(0, b_fuel - m_fuel)
+    b_fuel = df_merged["Billed_Fuel"] if "Billed_Fuel" in df_merged.columns else 0
+    m_fuel = df_merged["Max_Fuel_Allowance"] if "Max_Fuel_Allowance" in df_merged.columns else 0
+    df_merged["Fuel_Variance"] = np.maximum(0, b_fuel - m_fuel)
         df_merged["Offloading_Variance"] = np.maximum(
             0,
             df_merged["Billed_Offloading"]
