@@ -220,9 +220,9 @@ with tabs[0]:
 
         # eTIMS Tax Check
         df_merged["Expected_Subtotal"] = (
-            df_merged["Contract_Base"]
-            + df_merged["Max_Fuel_Allowance"]
-            + df_merged["Max_Offloading_Allowance"]
+            (df_merged["Contract_Base"] if "Contract_Base" in df_merged.columns else 0)
+            + m_fuel
+            + m_off
         )
 
         df_merged["Expected_VAT"] = df_merged["Expected_Subtotal"] * 0.16
@@ -292,20 +292,32 @@ with tabs[0]:
             selected_inv = st.selectbox(
                 "Select Invoice for Action:", flagged["Invoice_No"]
             )
-            row = flagged[flagged["Invoice_No"] == selected_inv].iloc[0]
+            selected_df = flagged[flagged["Invoice_No"] == selected_inv]
+            row = selected_df.iloc[0]
+
+            # Safe fallbacks to prevent KeyErrors during template formatting
+            b_base_val = row.get("Billed_Base", row.get("Billed_Base_Rate", 0.0))
+            c_base_val = row.get("Contract_Base", 0.0)
+            overcharge_val = row.get("Total_Overcharge", 0.0)
+            status_val = row.get("Audit_Status", "FLAGGED")
+
+            carrier_name = str(row.get("Carrier", "Carrier"))
+            email_slug = carrier_name.lower().replace(" ", "")
 
             recipient_email = st.text_input(
                 "Carrier Accounts Email:",
-                value=f"accounts@{row['Carrier'].lower().replace(' ', '')}.co.ke",
+                value=f"accounts@{email_slug}.co.ke",
             )
-            dispute_subject = f"Payment Hold / Discrepancy Notice - Invoice #{row['Invoice_No']}"
-            dispute_body = f"""Dear {row['Carrier']} Accounts Team,
+            dispute_subject = f"Payment Hold / Discrepancy Notice - Invoice #{row.get('Invoice_No', 'N/A')}"
+            dispute_body = f"""Dear {carrier_name} Accounts Team,
 
-Our automated audit engine identified an overcharge / eTIMS discrepancy on Invoice #{row['Invoice_No']}.
+Our automated audit engine identified an overcharge / eTIMS discrepancy on Invoice #{row.get('Invoice_No', 'N/A')}.
 
-Billed Base Rate: KES {row['Billed_Base']:,.2f} | Contract Base: KES {row['Contract_Base']:,.2f}
-Total Calculated Overcharge: KES {row['Total_Overcharge']:,.2f}
-eTIMS Validation Status: {'VALID' if row['eTIMS_Valid'] else 'INVALID / MISMATCHED VAT (16%)'}
+Audit Summary:
+- Status: {status_val}
+- Billed Base Rate: KES {b_base_val:,.2f} | Contract Base: KES {c_base_val:,.2f}
+- Calculated Overcharge: KES {overcharge_val:,.2f}
+- eTIMS Validation Status: {'VALID' if row.get('eTIMS_Valid', False) else 'INVALID / MISMATCHED VAT (16%)'}
 
 Please send a corrected eTIMS invoice matching contracted terms to proceed with payment.
 
