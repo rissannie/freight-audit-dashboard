@@ -235,17 +235,17 @@ with tabs[0]:
         & (df_merged["VAT_Discrepancy"] < 1.0)
     )
 
-        conditions = [
+    conditions = [
             (df_merged["Total_Overcharge"] > 0) & (~df_merged["eTIMS_Valid"]),
             (df_merged["Total_Overcharge"] > 0),
             (~df_merged["eTIMS_Valid"]),
         ]
-        choices = [
+    choices = [
             "FLAGGED_OVERCHARGE_AND_ETIMS",
             "FLAGGED_RATE_OVERCHARGE",
             "FLAGGED_ETIMS_NON_COMPLIANT",
         ]
-        df_merged["Audit_Status"] = np.select(
+    df_merged["Audit_Status"] = np.select(
             conditions, choices, default="PASSED_VERIFIED"
         )
 
