@@ -211,12 +211,12 @@ with tabs[0]:
     b_off = df_merged["Billed_Offloading"] if "Billed_Offloading" in df_merged.columns else 0
     m_off = df_merged["Max_Offloading_Allowance"] if "Max_Offloading_Allowance" in df_merged.columns else 0
     df_merged["Offloading_Variance"] = np.maximum(0, b_off - m_off)
-        df_merged["Total_Overcharge"] = (
-            df_merged["Base_Variance"]
-            + df_merged["Fuel_Variance"]
-            + df_merged["Offloading_Variance"]
-        )
-
+    
+       df_merged["Total_Overcharge"] = (
+         df_merged["Base_Variance"]
+         + df_merged["Fuel_Variance"]
+         + df_merged["Offloading_Variance"]
+     )
         # eTIMS Tax Check
         df_merged["Expected_Subtotal"] = (
             df_merged["Contract_Base"]
