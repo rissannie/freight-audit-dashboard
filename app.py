@@ -174,13 +174,16 @@ with tabs[0]:
         invoice_records = [parse_pdf_invoice(pdf) for pdf in pdf_files]
         df_inv = pd.DataFrame(invoice_records)
 
-       # Resilient CSV/Excel loader with encoding fallbacks
+       # Resilient CSV/Excel loader with pointer reset and encoding fallbacks
         if contract_file.name.endswith(".csv"):
             try:
+                contract_file.seek(0)
                 df_rates = pd.read_csv(contract_file, encoding='utf-8')
             except Exception:
-                df_rates = pd.read_csv(contract_file, encoding='latin1')
+                contract_file.seek(0)
+                df_rates = pd.read_csv(contract_file, encoding='latin1', on_bad_lines='skip')
         else:
+            contract_file.seek(0)
             df_rates = pd.read_excel(contract_file)
 
         # Standardize column headers dynamically
