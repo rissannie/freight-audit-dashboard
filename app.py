@@ -1,11 +1,8 @@
 import os
 import re
-import smtplib
 import sqlite3
 import hashlib
-import secrets
 from io import BytesIO
-from email.mime.text import MIMEText
 from datetime import datetime
 
 import numpy as np
@@ -27,7 +24,6 @@ st.set_page_config(page_title="Enterprise Freight Audit", layout="wide")
 
 st.markdown("""
     <style>
-    /* Professional Enterprise Theme */
     div[data-testid="stMetricValue"] { color: #1E3A8A; font-weight: 800; font-size: 28px; }
     .stTabs [data-baseweb="tab"] { background-color: #F1F5F9; border-radius: 4px; padding: 0 16px; margin-right: 4px;}
     .stTabs [aria-selected="true"] { background-color: #1E3A8A !important; color: white !important; }
@@ -59,7 +55,6 @@ def init_db():
         )
     """)
     
-    # Safe schema migration for new features
     try:
         cursor.execute("ALTER TABLE audit_ledger ADD COLUMN dispute_status TEXT DEFAULT 'PENDING'")
     except sqlite3.OperationalError:
@@ -92,7 +87,6 @@ init_db()
 def save_audit_record(df_results):
     conn = sqlite3.connect(DB_FILE)
     for _, row in df_results.iterrows():
-        # Check if record exists to prevent duplicates on rerun
         cur = conn.cursor()
         cur.execute("SELECT id FROM audit_ledger WHERE invoice_no = ?", (str(row.get("Invoice_No")),))
         if cur.fetchone():
@@ -123,7 +117,7 @@ def update_dispute_status(invoice_no, status):
     conn.close()
 
 # ------------------------------------------------------------------------------
-# 2. AUTHENTICATION & SECURITY
+# 2. AUTHENTICATION & PASSWORD RESET
 # ------------------------------------------------------------------------------
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
@@ -150,6 +144,7 @@ def update_user_password(username, new_password):
 
 if not st.session_state["authenticated"]:
     st.title("🔒 Enterprise Freight Audit Portal")
+    
     if st.session_state["auth_view"] == "login":
         with st.form("login_form"):
             username_input = st.text_input("Username")
@@ -161,7 +156,43 @@ if not st.session_state["authenticated"]:
                     st.session_state.update({"authenticated": True, "username": username_input, "role": user_role})
                     st.rerun()
                 else:
-                    st.error("Invalid credentials.")
+                    st.error("Invalid username or password.")
+        
+        if st.button("🔑 Forgot Password?"):
+            st.session_state["auth_view"] = "reset"
+            st.rerun()
+
+    elif st.session_state["auth_view"] == "reset":
+        st.subheader("Reset Password")
+        with st.form("reset_form"):
+            reset_username = st.text_input("Enter your Username")
+            new_password = st.text_input("Enter New Password", type="password")
+            confirm_password = st.text_input("Confirm New Password", type="password")
+            reset_submit = st.form_submit_button("Reset Password")
+            
+            if reset_submit:
+                if new_password != confirm_password:
+                    st.error("Passwords do not match.")
+                elif not reset_username or not new_password:
+                    st.error("Please fill in all fields.")
+                else:
+                    conn = sqlite3.connect(DB_FILE)
+                    cur = conn.cursor()
+                    cur.execute("SELECT username FROM users WHERE username = ?", (reset_username,))
+                    user_exists = cur.fetchone()
+                    conn.close()
+                    
+                    if user_exists:
+                        update_user_password(reset_username, new_password)
+                        st.success("Password successfully reset! You can now log in.")
+                        st.session_state["auth_view"] = "login"
+                    else:
+                        st.error("Username not found.")
+
+        if st.button("⬅️ Back to Login"):
+            st.session_state["auth_view"] = "login"
+            st.rerun()
+
     st.stop()
 
 st.sidebar.write(f"Logged in as: **{st.session_state['username'].upper()}** | **{st.session_state['role'].upper()}**")
@@ -170,7 +201,7 @@ if st.sidebar.button("Logout"):
     st.rerun()
 
 # ------------------------------------------------------------------------------
-# 3. FAST HIGH-PERFORMANCE PDF ENGINE & REPORTS
+# 3. PDF PROCESSING ENGINE & REPORTS
 # ------------------------------------------------------------------------------
 def parse_pdf_invoice(file_obj, usd_rate):
     extracted_text = ""
@@ -179,12 +210,11 @@ def parse_pdf_invoice(file_obj, usd_rate):
             extracted_text += (page.extract_text() or "") + "\n"
 
     inv_match = re.search(r"Invoice\s*#?\s*:?\s*([A-Za-z0-9-]+)", extracted_text, re.IGNORECASE)
-    carrier_match = re.search(r"(Swara Express|Rift Transport|Siginon|Freight In Time)", extracted_text, re.IGNORECASE)
+    carrier_match = re.search(r"(Swara Express|Rift Transport|Siginon|Freight In Time|Kefar|Express)", extracted_text, re.IGNORECASE)
     bol_match = re.search(r"BoL\s*Ref\s*:?\s*([A-Za-z0-9-]+)", extracted_text, re.IGNORECASE)
     etims_match = re.search(r"(KRA[A-Za-z0-9]{8,15}|CU[0-9]{8,12})", extracted_text, re.IGNORECASE)
 
-    # Multi-currency extraction support
-    base_match = re.search(r"Base\s*Rate\s*:?\s*(KES|USD|\$)?\s*([\d,]+\.?\d*)", extracted_text, re.IGNORECASE)
+    base_match = re.search(r"(?:Base\s*Rate|Total|Amount)\s*:?\s*(KES|USD|\$)?\s*([\d,]+\.?\d*)", extracted_text, re.IGNORECASE)
     
     def clean_currency(match, fx_rate):
         if not match: return 0.0
@@ -278,73 +308,91 @@ with tabs[0]:
 
         df_rates = pd.read_csv(contract_file) if contract_file.name.endswith(".csv") else pd.read_excel(contract_file)
         
-        # Versioning: Filter Rate Cards by Effective Dates if columns exist
-        if 'Valid_From' in df_rates.columns and 'Valid_To' in df_rates.columns:
-            df_rates['Valid_From'] = pd.to_datetime(df_rates['Valid_From'])
-            df_rates['Valid_To'] = pd.to_datetime(df_rates['Valid_To'])
-            context_date = pd.to_datetime(audit_date)
-            df_rates = df_rates[(df_rates['Valid_From'] <= context_date) & (df_rates['Valid_To'] >= context_date)]
+        # Smart Column Name Mapping
+        col_mappings = {}
+        for col in df_rates.columns:
+            clean_col = col.strip().lower()
+            if clean_col in ['company_name', 'carrier', 'vendor', 'transport_company']:
+                col_mappings[col] = 'Carrier'
+            elif clean_col in ['contract_rate_kes', 'contract_base', 'rate', 'base_rate', 'contract_rate']:
+                col_mappings[col] = 'Contract_Base'
+        df_rates = df_rates.rename(columns=col_mappings)
 
-        df_rates = df_rates.rename(columns={'Company_Name': 'Carrier', 'Contract_Rate_KES': 'Contract_Base', 'Billed_Rate_KES': 'Billed_Base'})
-        df_merged = pd.merge(df_inv, df_rates, on="Carrier", how="left").fillna(0)
+        if 'Carrier' not in df_rates.columns or 'Contract_Base' not in df_rates.columns:
+            st.error("⚠️ CSV Column Error: Please ensure your CSV file has a column for Carrier/Company_Name and Contract_Rate_KES.")
+        else:
+            if 'Valid_From' in df_rates.columns and 'Valid_To' in df_rates.columns:
+                df_rates['Valid_From'] = pd.to_datetime(df_rates['Valid_From'])
+                df_rates['Valid_To'] = pd.to_datetime(df_rates['Valid_To'])
+                context_date = pd.to_datetime(audit_date)
+                df_rates = df_rates[(df_rates['Valid_From'] <= context_date) & (df_rates['Valid_To'] >= context_date)]
 
-        df_merged["Total_Overcharge"] = np.maximum(0, df_merged.get("Billed_Base", 0) - df_merged.get("Contract_Base", 0)) + \
-                                        np.maximum(0, df_merged.get("Billed_Fuel", 0) - df_merged.get("Max_Fuel_Allowance", 0))
+            df_merged = pd.merge(df_inv, df_rates, on="Carrier", how="left").fillna(0)
 
-        df_merged["eTIMS_Valid"] = df_merged["eTIMS_CU_Serial"].astype(str).str.contains("KRA|CU", case=False, regex=True)
-        
-        # Apply Threshold
-        conditions = [
-            (df_merged["Total_Overcharge"] > variance_threshold) & (~df_merged["eTIMS_Valid"]),
-            (df_merged["Total_Overcharge"] > variance_threshold),
-            (~df_merged["eTIMS_Valid"])
-        ]
-        choices = ["FLAGGED_OVERCHARGE_AND_ETIMS", "FLAGGED_RATE_OVERCHARGE", "FLAGGED_ETIMS_NON_COMPLIANT"]
-        df_merged["Audit_Status"] = np.select(conditions, choices, default="PASSED_VERIFIED")
+            df_merged["Total_Overcharge"] = np.maximum(0, df_merged.get("Billed_Base", 0) - df_merged.get("Contract_Base", 0)) + \
+                                            np.maximum(0, df_merged.get("Billed_Fuel", 0) - df_merged.get("Max_Fuel_Allowance", 0))
 
-        save_audit_record(df_merged)
-
-        # KPI Metrics
-        total_recovered = df_merged[df_merged['Total_Overcharge'] > variance_threshold]['Total_Overcharge'].sum()
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("PDFs Processed", len(df_merged))
-        c2.metric("Verified Clean", len(df_merged[df_merged["Audit_Status"] == "PASSED_VERIFIED"]))
-        c3.metric("Capital Saved", f"KES {total_recovered:,.2f}")
-        c4.metric("Threshold Applied", f"KES {variance_threshold}")
-
-        st.markdown("---")
-        c_left, c_right = st.columns([3, 1])
-        with c_left:
-            st.subheader("📋 Audit Extraction Results")
-        with c_right:
-            st.download_button("📥 Executive PDF Report", generate_batch_summary_pdf(df_merged), "Batch_Summary.pdf", "application/pdf")
+            df_merged["eTIMS_Valid"] = df_merged["eTIMS_CU_Serial"].astype(str).str.contains("KRA|CU", case=False, regex=True)
             
-        st.dataframe(df_merged[["Invoice_No", "Carrier", "Total_Overcharge", "Audit_Status"]], use_container_width=True)
+            conditions = [
+                (df_merged["Total_Overcharge"] > variance_threshold) & (~df_merged["eTIMS_Valid"]),
+                (df_merged["Total_Overcharge"] > variance_threshold),
+                (~df_merged["eTIMS_Valid"])
+            ]
+            choices = ["FLAGGED_OVERCHARGE_AND_ETIMS", "FLAGGED_RATE_OVERCHARGE", "FLAGGED_ETIMS_NON_COMPLIANT"]
+            df_merged["Audit_Status"] = np.select(conditions, choices, default="PASSED_VERIFIED")
 
-        # Action Center
-        flagged = df_merged[df_merged["Audit_Status"] != "PASSED_VERIFIED"]
-        if not flagged.empty:
-            st.subheader("✉️ Action Center")
-            selected_inv = st.selectbox("Select Invoice:", flagged["Invoice_No"])
-            row = flagged[flagged["Invoice_No"] == selected_inv].iloc[0]
-            
-            c_btn1, c_btn2 = st.columns(2)
-            with c_btn1:
-                st.download_button("📄 Download Debit Note (PDF)", generate_pdf_debit_note(row), f"Debit_Note_{row['Invoice_No']}.pdf", "application/pdf")
-            
-            if st.session_state["role"] in ["admin", "finance"]:
-                if st.button("🚀 Dispatch Dispute Email"):
-                    update_dispute_status(row['Invoice_No'], 'DISPUTE_SENT')
-                    st.success(f"Dispute logged for Invoice {row['Invoice_No']}!")
+            save_audit_record(df_merged)
+
+            total_recovered = df_merged[df_merged['Total_Overcharge'] > variance_threshold]['Total_Overcharge'].sum()
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("PDFs Processed", len(df_merged))
+            c2.metric("Verified Clean", len(df_merged[df_merged["Audit_Status"] == "PASSED_VERIFIED"]))
+            c3.metric("Capital Saved", f"KES {total_recovered:,.2f}")
+            c4.metric("Threshold Applied", f"KES {variance_threshold}")
+
+            st.markdown("---")
+            c_left, c_right = st.columns([3, 1])
+            with c_left:
+                st.subheader("📋 Audit Extraction Results")
+            with c_right:
+                st.download_button("📥 Executive PDF Report", generate_batch_summary_pdf(df_merged), "Batch_Summary.pdf", "application/pdf")
+                
+            st.dataframe(df_merged[["Invoice_No", "Carrier", "Total_Overcharge", "Audit_Status"]], use_container_width=True)
+
+            flagged = df_merged[df_merged["Audit_Status"] != "PASSED_VERIFIED"]
+            if not flagged.empty:
+                st.subheader("✉️ Action Center")
+                selected_inv = st.selectbox("Select Invoice:", flagged["Invoice_No"])
+                row = flagged[flagged["Invoice_No"] == selected_inv].iloc[0]
+                
+                c_btn1, c_btn2 = st.columns(2)
+                with c_btn1:
+                    st.download_button("📄 Download Debit Note (PDF)", generate_pdf_debit_note(row), f"Debit_Note_{row['Invoice_No']}.pdf", "application/pdf")
+                
+                if st.session_state["role"] in ["admin", "finance"]:
+                    if st.button("🚀 Dispatch Dispute Email"):
+                        update_dispute_status(row['Invoice_No'], 'DISPUTE_SENT')
+                        st.success(f"Dispute logged for Invoice {row['Invoice_No']}!")
 
 with tabs[1]:
     st.subheader("📊 Carrier Analytics")
     conn = sqlite3.connect(DB_FILE)
     df_ledger = pd.read_sql_query("SELECT * FROM audit_ledger", conn)
     conn.close()
+    
     if not df_ledger.empty:
-        fig = px.bar(df_ledger.groupby("carrier")["total_overcharge"].sum().reset_index(), x="carrier", y="total_overcharge", title="Total Claims by Carrier")
+        fig = px.bar(
+            df_ledger.groupby("carrier")["total_overcharge"].sum().reset_index(), 
+            x="carrier", 
+            y="total_overcharge", 
+            title="Total Claims by Carrier (KES)",
+            color="carrier",
+            labels={"carrier": "Carrier Name", "total_overcharge": "Total Overcharge (KES)"}
+        )
         st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("ℹ️ No audit records found in the database. Please upload both PDF Invoices and Rate Cards in Tab 1 to run an audit.")
 
 with tabs[2]:
     st.subheader("📜 Audit Trail & Dispute History")
@@ -353,7 +401,6 @@ with tabs[2]:
     conn.close()
     st.dataframe(df_ledger, use_container_width=True)
     
-    # Resolve Disputes
     pending = df_ledger[df_ledger['dispute_status'] == 'DISPUTE_SENT']
     if not pending.empty:
         resolve_inv = st.selectbox("Mark Credit Note Received for:", pending['invoice_no'])
@@ -364,10 +411,10 @@ with tabs[2]:
 with tabs[3]:
     st.subheader("👤 User Profile")
     with st.form("pass_form"):
-        old_pass, new_pass = st.text_input("Current", type="password"), st.text_input("New", type="password")
-        if st.form_submit_button("Update") and verify_user(st.session_state["username"], old_pass):
+        old_pass, new_pass = st.text_input("Current Password", type="password"), st.text_input("New Password", type="password")
+        if st.form_submit_button("Update Password") and verify_user(st.session_state["username"], old_pass):
             update_user_password(st.session_state["username"], new_pass)
-            st.success("Updated!")
+            st.success("Password updated successfully!")
 
 with tabs[4]:
     st.subheader("⚙️ System Settings")
