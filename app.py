@@ -12,6 +12,9 @@ import pandas as pd
 import pdfplumber
 import streamlit as st
 import plotly.express as px
+import cv2
+from PIL import Image
+from pdf2image import convert_from_bytes
 
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -42,6 +45,7 @@ def init_db():
             carrier TEXT,
             bol_ref TEXT,
             etims_cu_serial TEXT,
+            qr_etims_data TEXT,
             total_overcharge REAL,
             audit_status TEXT,
             etims_valid INTEGER
@@ -79,14 +83,15 @@ def save_audit_record(df_results):
     for _, row in df_results.iterrows():
         conn.execute(
             """
-            INSERT INTO audit_ledger (invoice_no, carrier, bol_ref, etims_cu_serial, total_overcharge, audit_status, etims_valid)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO audit_ledger (invoice_no, carrier, bol_ref, etims_cu_serial, qr_etims_data, total_overcharge, audit_status, etims_valid)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 str(row.get("Invoice_No", "N/A")),
                 str(row.get("Carrier", "Unknown")),
                 str(row.get("BoL_Ref", "N/A")),
                 str(row.get("eTIMS_CU_Serial", "INVALID")),
+                str(row.get("QR_eTIMS_Data", "Not Scanned")),
                 float(row.get("Total_Overcharge", 0.0)),
                 str(row.get("Audit_Status", "FLAGGED")),
                 1 if row.get("eTIMS_Valid", False) else 0,
@@ -96,7 +101,7 @@ def save_audit_record(df_results):
     conn.close()
 
 # ------------------------------------------------------------------------------
-# 2. AUTHENTICATION, RBAC & PASSWORD MANAGEMENT
+# 2. AUTHENTICATION & SECURITY
 # ------------------------------------------------------------------------------
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
@@ -202,14 +207,43 @@ if st.sidebar.button("Logout"):
     st.rerun()
 
 # ------------------------------------------------------------------------------
-# 3. PDF ENGINE & DEBIT NOTE GENERATOR
+# 3. PDF ENGINE & OPENCV QR CODE SCANNER
 # ------------------------------------------------------------------------------
+def scan_qr_from_pdf_bytes(file_bytes):
+    """Converts PDF pages into images and scans for embedded KRA eTIMS QR codes via OpenCV."""
+    qr_data = None
+    try:
+        images = convert_from_bytes(file_bytes)
+        qr_detector = cv2.QRCodeDetector()
+        
+        for img in images:
+            # Convert PIL image to OpenCV format
+            open_cv_image = np.array(img.convert('RGB'))
+            open_cv_image = open_cv_image[:, :, ::-1].copy() # RGB to BGR
+            
+            # Scan for QR code
+            data, bbox, _ = qr_detector.detectAndDecode(open_cv_image)
+            if data:
+                qr_data = data
+                break
+    except Exception:
+        qr_data = None
+    return qr_data
+
 def parse_pdf_invoice(file_obj):
     extracted_text = ""
+    file_bytes = file_obj.read()
+    file_obj.seek(0) # Reset file pointer after reading bytes
+    
+    # Extract text content
     with pdfplumber.open(file_obj) as pdf:
         for page in pdf.pages:
             extracted_text += (page.extract_text() or "") + "\n"
 
+    # Scan for QR Code image directly on PDF
+    qr_code_content = scan_qr_from_pdf_bytes(file_bytes)
+
+    # Regex Text Parsing
     inv_match = re.search(r"Invoice\s*#?\s*:?\s*([A-Za-z0-9-]+)", extracted_text)
     carrier_match = re.search(r"(Swara Express|Rift Transport|Siginon|Freight In Time)", extracted_text)
     bol_match = re.search(r"BoL\s*Ref\s*:?\s*([A-Za-z0-9-]+)", extracted_text)
@@ -227,7 +261,8 @@ def parse_pdf_invoice(file_obj):
         "Invoice_No": inv_match.group(1) if inv_match else file_obj.name,
         "Carrier": carrier_match.group(1) if carrier_match else "Unknown",
         "BoL_Ref": bol_match.group(1) if bol_match else "N/A",
-        "eTIMS_CU_Serial": etims_match.group(1) if etims_match else "INVALID",
+        "eTIMS_CU_Serial": etims_match.group(1) if etims_match else ("QR_VALIDATED" if qr_code_content else "INVALID"),
+        "QR_eTIMS_Data": qr_code_content if qr_code_content else "None Detected",
         "Billed_Base": clean_num(base_match),
         "Billed_Fuel": clean_num(fuel_match),
         "Billed_Offloading": clean_num(offload_match),
@@ -245,7 +280,7 @@ def generate_pdf_debit_note(row_data):
     c.drawString(50, 725, f"Carrier: {row_data.get('Carrier', 'N/A')}")
     c.drawString(50, 710, f"Target Invoice No: {row_data.get('Invoice_No', 'N/A')}")
     c.drawString(50, 695, f"BoL Reference: {row_data.get('BoL_Ref', 'N/A')}")
-    c.drawString(50, 680, f"eTIMS Serial: {row_data.get('eTIMS_CU_Serial', 'N/A')}")
+    c.drawString(50, 680, f"eTIMS Serial / QR: {row_data.get('eTIMS_CU_Serial', 'N/A')}")
     
     c.setFont("Helvetica-Bold", 12)
     c.drawString(50, 640, "Financial Variance Breakdown:")
@@ -267,10 +302,10 @@ def generate_pdf_debit_note(row_data):
     return buffer
 
 # ------------------------------------------------------------------------------
-# 4. DASHBOARD INTERFACE & WORKFLOW
+# 4. DASHBOARD INTERFACE
 # ------------------------------------------------------------------------------
 st.title("🚛 Kenyan Enterprise Freight Audit & Reconciliation")
-st.caption("PDF Parsing | eTIMS Compliance | Persistent History | RBAC Security")
+st.caption("PDF Parsing | eTIMS QR Scanner | Persistent History | RBAC Security")
 
 tabs = st.tabs([
     "📋 Active Audit Engine", 
@@ -337,7 +372,7 @@ with tabs[0]:
         df_merged["VAT_Discrepancy"] = np.abs(df_merged["Billed_VAT"] - df_merged["Expected_VAT"])
 
         df_merged["eTIMS_Valid"] = (
-            df_merged["eTIMS_CU_Serial"].astype(str).str.startswith("KRA")
+            (df_merged["eTIMS_CU_Serial"].astype(str).str.startswith("KRA") | (df_merged["QR_eTIMS_Data"] != "None Detected"))
             & (df_merged["VAT_Discrepancy"] < 1.0)
         )
 
@@ -358,7 +393,7 @@ with tabs[0]:
 
         # ROI Calculator Metrics
         total_recovered = df_merged['Total_Overcharge'].sum()
-        estimated_tool_cost = 25000.0  # KES Monthly License Baseline
+        estimated_tool_cost = 25000.0
         roi_multiplier = (total_recovered / estimated_tool_cost) if total_recovered > 0 else 0.0
 
         m1, m2, m3, m4 = st.columns(4)
@@ -368,15 +403,15 @@ with tabs[0]:
         m4.metric("Estimated Platform ROI", f"{roi_multiplier:.1f}x")
 
         st.markdown("---")
-        st.subheader("📋 Audit Extraction Results")
+        st.subheader("📋 Audit Extraction Results & QR Verification")
         st.dataframe(
             df_merged[[
-                "Invoice_No", "Carrier", "BoL_Ref", "eTIMS_CU_Serial", "Total_Overcharge", "Audit_Status"
+                "Invoice_No", "Carrier", "BoL_Ref", "eTIMS_CU_Serial", "QR_eTIMS_Data", "Total_Overcharge", "Audit_Status"
             ]],
             use_container_width=True,
         )
 
-        # Dispute Email Action Center
+        # Dispute Action Center
         st.subheader("✉️ Action Center: Direct Dispute Resolution")
         flagged = df_merged[df_merged["Audit_Status"] != "PASSED_VERIFIED"]
 
@@ -395,7 +430,7 @@ with tabs[0]:
 
             recipient_email = st.text_input("Carrier Accounts Email:", value=f"accounts@{email_slug}.co.ke")
             
-            # PDF Debit Note Generator Download Button
+            # PDF Debit Note Download Button
             pdf_bytes = generate_pdf_debit_note(row)
             st.download_button(
                 label="📄 Generate & Download Official Debit Note (PDF)",
@@ -413,6 +448,7 @@ Audit Summary:
 - Billed Base Rate: KES {b_base_val:,.2f} | Contract Base: KES {c_base_val:,.2f}
 - Calculated Overcharge: KES {overcharge_val:,.2f}
 - eTIMS Validation: {'VALID' if row.get('eTIMS_Valid', False) else 'INVALID / MISMATCHED VAT'}
+- Scanned QR Content: {row.get('QR_eTIMS_Data', 'N/A')}
 
 Please issue a revised tax invoice or credit note matching contract rates.
 
@@ -421,7 +457,6 @@ Logistics & Finance Team
 """
             st.text_area("Dispute Email Preview:", dispute_body, height=160)
 
-            # RBAC Enforcement for Email Dispatch
             if st.session_state["role"] in ["admin", "finance"]:
                 if st.button("🚀 Dispatch Dispute Email"):
                     smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
