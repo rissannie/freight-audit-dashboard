@@ -336,12 +336,16 @@ with tabs[0]:
 
         df_merged = pd.merge(df_inv, df_rates, on="Carrier", how="left")
 
-        # Safely extract Billed_Base and Contract_Base regardless of column suffixes
-        billed_cols = [c for c in df_merged.columns if 'Billed_Base' in c]
-        contract_cols = [c for c in df_merged.columns if 'Contract_Base' in c]
+        # Safely extract Billed_Base and Contract_Base
+        if 'Billed_Base' in df_merged.columns:
+            billed_vals = pd.to_numeric(df_merged['Billed_Base'], errors='coerce').fillna(150000.00)
+        else:
+            billed_vals = pd.Series([150000.00] * len(df_merged))
 
-        billed_vals = pd.to_numeric(df_merged[billed_cols[0]], errors='coerce').fillna(150000.00) if billed_cols else pd.Series([150000.00] * len(df_merged))
-        contract_vals = pd.to_numeric(df_merged[contract_cols[0]], errors='coerce').fillna(120000.00) if contract_cols else pd.Series([120000.00] * len(df_merged))
+        if 'Contract_Base' in df_merged.columns:
+            contract_vals = pd.to_numeric(df_merged['Contract_Base'], errors='coerce').fillna(120000.00)
+        else:
+            contract_vals = pd.Series([120000.00] * len(df_merged))
 
         df_merged['Billed_Base'] = billed_vals
         df_merged['Contract_Base'] = contract_vals
