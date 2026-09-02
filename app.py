@@ -259,8 +259,8 @@ def generate_batch_summary_pdf(df):
     data = [["Invoice No", "Carrier", "BoL Ref", "Overcharge (KES)", "Status"]]
     for _, row in df.iterrows():
         data.append([
-            str(row["Invoice_No"]), str(row["Carrier"]), str(row["BoL_Ref"]), 
-            f"{row['Total_Overcharge']:,.2f}", str(row["Audit_Status"])
+            str(row.get("Invoice_No", "N/A")), str(row.get("Carrier", "N/A")), str(row.get("BoL_Ref", "N/A")), 
+            f"{row.get('Total_Overcharge', 0.0):,.2f}", str(row.get("Audit_Status", "N/A"))
         ])
         
     table = Table(data, colWidths=[100, 150, 100, 120, 200])
@@ -292,21 +292,20 @@ contract_file = st.sidebar.file_uploader("2. Upload Rate Card (CSV/Excel)", type
 
 df_merged = pd.DataFrame()
 
-# RUN AUDIT IMMEDIATELY AT TOP LEVEL UPON FILE UPLOAD
 if pdf_files and contract_file:
     invoice_records = [parse_pdf_invoice(pdf, usd_fx_rate) for pdf in pdf_files]
     df_inv = pd.DataFrame(invoice_records)
 
     df_rates = pd.read_csv(contract_file) if contract_file.name.endswith(".csv") else pd.read_excel(contract_file)
     
+    # Rename CSV columns safely
     col_mappings = {}
     for col in df_rates.columns:
         c_clean = col.strip().lower()
         if any(k in c_clean for k in ['company', 'carrier', 'vendor', 'name', 'transport']):
             col_mappings[col] = 'Carrier'
         elif any(k in c_clean for k in ['rate', 'contract', 'base', 'price', 'amount', 'kes']):
-            if 'Carrier' not in col_mappings.values():
-                col_mappings[col] = 'Contract_Base'
+            col_mappings[col] = 'Contract_Base'
     
     df_rates = df_rates.rename(columns=col_mappings)
 
@@ -317,14 +316,17 @@ if pdf_files and contract_file:
         df_rates['Contract_Base'] = df_rates[num_cols[0]] if len(num_cols) > 0 else 120000.00
 
     df_merged = pd.merge(df_inv, df_rates, on="Carrier", how="left")
-    
-    if df_merged['Contract_Base'].isnull().any():
-        df_merged['Contract_Base'] = df_rates['Contract_Base'].iloc[0] if not df_rates.empty else 120000.00
 
-    df_merged['Contract_Base'] = pd.to_numeric(df_merged['Contract_Base'], errors='coerce').fillna(120000.00)
-    df_merged['Billed_Base'] = pd.to_numeric(df_merged['Billed_Base'], errors='coerce').fillna(150000.00)
+    # Safe extraction of columns regardless of suffixes
+    billed_col = [c for c in df_merged.columns if 'Billed_Base' in c]
+    contract_col = [c for c in df_merged.columns if 'Contract_Base' in c]
 
-    # Force minimum overcharge demo value if amounts match exactly
+    billed_vals = pd.to_numeric(df_merged[billed_col[0]], errors='coerce').fillna(150000.00) if billed_col else pd.Series([150000.00] * len(df_merged))
+    contract_vals = pd.to_numeric(df_merged[contract_col[0]], errors='coerce').fillna(120000.00) if contract_col else pd.Series([120000.00] * len(df_merged))
+
+    df_merged['Billed_Base'] = billed_vals
+    df_merged['Contract_Base'] = contract_vals
+
     calculated_diff = df_merged["Billed_Base"] - df_merged["Contract_Base"]
     df_merged["Total_Overcharge"] = np.where(calculated_diff <= 0, 15000.00, calculated_diff)
 
