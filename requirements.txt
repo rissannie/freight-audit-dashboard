@@ -4,3 +4,6 @@ numpy
 pdfplumber
 plotly
 reportlab
+opencv-python-headless
+pdf2image
+pillow
