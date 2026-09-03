@@ -82,7 +82,7 @@ init_db()
 def save_audit_record(df_results):
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
-    cur.execute("DELETE FROM audit_ledger")  # Clear previous runs to avoid tally multiplication
+    cur.execute("DELETE FROM audit_ledger")  # Clean slate per run to prevent stacking
     
     for _, row in df_results.iterrows():
         cur.execute(
@@ -173,7 +173,6 @@ def parse_pdf_invoice(file_obj, usd_rate):
             if not text.strip():
                 continue
 
-            # Extract numbers or generate explicit INV-001 tags
             inv_match = re.search(r"(?:Invoice|INV|No|#)\s*:?\s*([A-Za-z0-9-]+)", text, re.IGNORECASE)
             carrier_match = re.search(r"([A-Za-z0-9\s]+(?:Logistics|Transport|Express|Freight|Limited|Ltd|Group|Swara|Kefar))", text, re.IGNORECASE)
             bol_match = re.search(r"BoL\s*Ref\s*:?\s*([A-Za-z0-9-]+)", text, re.IGNORECASE)
@@ -186,12 +185,11 @@ def parse_pdf_invoice(file_obj, usd_rate):
             global_counter += 1
 
             records.append({
-                "Page_Idx": page_num - 1,
                 "Invoice_No": invoice_id,
                 "Carrier": carrier_match.group(1).strip() if carrier_match else "Freight Carrier",
                 "BoL_Ref": bol_match.group(1) if bol_match else "N/A",
                 "eTIMS_CU_Serial": etims_match.group(1) if etims_match else "VALIDATED_SYSTEM_DEFAULT",
-                "Billed_Base": billed_amount,
+                "Billed_Base": float(billed_amount),
             })
             
     return records
@@ -273,40 +271,43 @@ with tabs[0]:
 
         df_rates = pd.read_csv(contract_file) if contract_file.name.endswith(".csv") else pd.read_excel(contract_file)
         
-        # Standardize CSV column mappings
-        col_mappings = {}
-        for col in df_rates.columns:
-            c_clean = str(col).strip().lower()
-            if any(k in c_clean for k in ['company', 'carrier', 'vendor', 'transport']):
-                col_mappings[col] = 'Carrier'
-            elif any(k in c_clean for k in ['rate', 'contract', 'base', 'price', 'kes', 'cost', 'amount']):
-                col_mappings[col] = 'Contract_Base'
-        
-        df_rates = df_rates.rename(columns=col_mappings)
-
-        # Ensure numerical rate extraction from CSV
-        if 'Contract_Base' not in df_rates.columns:
-            num_cols = df_rates.select_dtypes(include=[np.number]).columns
-            df_rates['Contract_Base'] = df_rates[num_cols[0]] if len(num_cols) > 0 else df_inv['Billed_Base']
-
-        df_rates['Row_Idx'] = np.arange(len(df_rates))
-        df_inv['Row_Idx'] = np.arange(len(df_inv))
-
-        # STRICT 1-TO-1 INDEX MERGE (Prevents row Cartesian multiplication)
-        if len(df_rates) == len(df_inv):
-            df_merged = pd.merge(df_inv, df_rates[['Row_Idx', 'Contract_Base']], on="Row_Idx", how="left")
+        # Safely extract single numeric column from Rate Card CSV
+        rate_numeric_cols = df_rates.select_dtypes(include=[np.number]).columns
+        if len(rate_numeric_cols) > 0:
+            contract_rates = df_rates[rate_numeric_cols[0]].values
         else:
-            df_merged = df_inv.copy()
-            df_merged['Contract_Base'] = df_rates['Contract_Base'].iloc[:len(df_inv)].values if len(df_rates) >= len(df_inv) else df_inv['Billed_Base']
+            # Fallback if CSV contains numbers as strings
+            extracted_vals = []
+            for val in df_rates.iloc[:, -1]:
+                try:
+                    extracted_vals.append(float(str(val).replace(',', '')))
+                except:
+                    extracted_vals.append(0.0)
+            contract_rates = np.array(extracted_vals)
 
-        # Financial Overcharge Math
-        df_merged["Billed_Base"] = pd.to_numeric(df_merged["Billed_Base"], errors='coerce').fillna(0.0)
-        df_merged["Contract_Base"] = pd.to_numeric(df_merged["Contract_Base"], errors='coerce').fillna(df_merged["Billed_Base"])
+        # STRICT 1-TO-1 DIRECT ASSIGNMENT (NO MERGING, NO DUPLICATION)
+        total_inv_count = len(df_inv)
+        if len(contract_rates) >= total_inv_count:
+            df_inv["Contract_Base"] = contract_rates[:total_inv_count]
+        else:
+            # If CSV has fewer rows than PDF, pad with Billed_Base
+            padded_rates = list(contract_rates) + list(df_inv["Billed_Base"].values[len(contract_rates):])
+            df_inv["Contract_Base"] = padded_rates[:total_inv_count]
 
+        df_merged = df_inv.copy()
+
+        # SAFE 1D NUMERIC CONVERSION
+        billed_series = pd.Series(df_merged["Billed_Base"]).astype(str).str.replace(',', '')
+        contract_series = pd.Series(df_merged["Contract_Base"]).astype(str).str.replace(',', '')
+
+        df_merged["Billed_Base"] = pd.to_numeric(billed_series, errors='coerce').fillna(0.0)
+        df_merged["Contract_Base"] = pd.to_numeric(contract_series, errors='coerce').fillna(df_merged["Billed_Base"])
+
+        # Financial Overcharge Calculation
         diff = df_merged["Billed_Base"] - df_merged["Contract_Base"]
         df_merged["Total_Overcharge"] = np.where(diff > variance_threshold, diff, 0.0)
 
-        # Status Logic
+        # Status Assignment
         df_merged["eTIMS_Valid"] = True
         df_merged["Audit_Status"] = np.where(df_merged["Total_Overcharge"] > 0, "FLAGGED_RATE_OVERCHARGE", "PASSED_VERIFIED")
 
