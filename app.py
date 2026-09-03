@@ -201,40 +201,45 @@ if st.sidebar.button("Logout"):
     st.rerun()
 
 # ------------------------------------------------------------------------------
-# 3. PDF PROCESSING ENGINE & REPORTS
+# 3. PDF PROCESSING ENGINE & REPORTS (PAGE-BY-PAGE PARSER)
 # ------------------------------------------------------------------------------
 def parse_pdf_invoice(file_obj, usd_rate):
-    extracted_text = ""
+    records = []
     with pdfplumber.open(file_obj) as pdf:
-        for page in pdf.pages:
-            extracted_text += (page.extract_text() or "") + "\n"
+        for page_num, page in enumerate(pdf.pages, start=1):
+            text = page.extract_text() or ""
+            if not text.strip():
+                continue
 
-    inv_match = re.search(r"Invoice\s*#?\s*:?\s*([A-Za-z0-9-]+)", extracted_text, re.IGNORECASE)
-    carrier_match = re.search(r"([A-Za-z0-9\s]+(?:Logistics|Transport|Express|Freight|Limited|Ltd|Group))", extracted_text, re.IGNORECASE)
-    bol_match = re.search(r"BoL\s*Ref\s*:?\s*([A-Za-z0-9-]+)", extracted_text, re.IGNORECASE)
-    etims_match = re.search(r"(KRA[A-Za-z0-9]{8,15}|CU[0-9]{8,12}|eTIMS[A-Za-z0-9-]+)", extracted_text, re.IGNORECASE)
+            inv_match = re.search(r"Invoice\s*#?\s*:?\s*([A-Za-z0-9-]+)", text, re.IGNORECASE)
+            carrier_match = re.search(r"([A-Za-z0-9\s]+(?:Logistics|Transport|Express|Freight|Limited|Ltd|Group))", text, re.IGNORECASE)
+            bol_match = re.search(r"BoL\s*Ref\s*:?\s*([A-Za-z0-9-]+)", text, re.IGNORECASE)
+            etims_match = re.search(r"(KRA[A-Za-z0-9]{8,15}|CU[0-9]{8,12}|eTIMS[A-Za-z0-9-]+)", text, re.IGNORECASE)
+            base_match = re.search(r"Base\s*Rate\s*:?\s*(KES|USD|\$)?\s*([\d,]+\.?\d*)", text, re.IGNORECASE)
 
-    base_match = re.search(r"Base\s*Rate\s*:?\s*(KES|USD|\$)?\s*([\d,]+\.?\d*)", extracted_text, re.IGNORECASE)
-    
-    def clean_currency(match, fx_rate):
-        if not match: return None
-        currency = match.group(1)
-        val = float(match.group(2).replace(",", ""))
-        return val * fx_rate if currency in ['USD', '$'] else val
+            def clean_currency(match, fx_rate):
+                if not match: return None
+                currency = match.group(1)
+                val = float(match.group(2).replace(",", ""))
+                return val * fx_rate if currency in ['USD', '$'] else val
 
-    amounts = [float(x.replace(",", "")) for x in re.findall(r"[\d,]+\.\d{2}", extracted_text)]
-    billed_amount = max(amounts) if amounts else 0.0
+            amounts = [float(x.replace(",", "")) for x in re.findall(r"[\d,]+\.\d{2}", text)]
+            billed_amount = max(amounts) if amounts else 0.0
 
-    parsed_base = clean_currency(base_match, usd_rate)
-    final_billed = parsed_base if parsed_base is not None else billed_amount
+            parsed_base = clean_currency(base_match, usd_rate)
+            final_billed = parsed_base if parsed_base is not None else billed_amount
 
-    return {
-        "Invoice_No": inv_match.group(1) if inv_match else file_obj.name.replace(".pdf", ""),
-        "Carrier": carrier_match.group(1).strip() if carrier_match else "Kefar Logistics",
-        "BoL_Ref": bol_match.group(1) if bol_match else "N/A",
-        "eTIMS_CU_Serial": etims_match.group(1) if etims_match else "VALIDATED_SYSTEM_DEFAULT",
-        "Billed_Base": final_billed,
-    }
+            invoice_id = inv_match.group(1) if inv_match else f"INV-{page_num:03d}"
+
+            records.append({
+                "Invoice_No": invoice_id,
+                "Carrier": carrier_match.group(1).strip() if carrier_match else "Kefar Logistics",
+                "BoL_Ref": bol_match.group(1) if bol_match else "N/A",
+                "eTIMS_CU_Serial": etims_match.group(1) if etims_match else "VALIDATED_SYSTEM_DEFAULT",
+                "Billed_Base": final_billed,
+            })
+            
+    return records
 
 def generate_pdf_debit_note(row_data):
     buffer = BytesIO()
@@ -306,7 +311,10 @@ with tabs[0]:
     contract_file = st.sidebar.file_uploader("2. Upload Rate Card (CSV/Excel)", type=["csv", "xlsx"])
 
     if pdf_files and contract_file:
-        invoice_records = [parse_pdf_invoice(pdf, usd_fx_rate) for pdf in pdf_files]
+        invoice_records = []
+        for pdf in pdf_files:
+            invoice_records.extend(parse_pdf_invoice(pdf, usd_fx_rate))
+
         df_inv = pd.DataFrame(invoice_records)
 
         df_rates = pd.read_csv(contract_file) if contract_file.name.endswith(".csv") else pd.read_excel(contract_file)
@@ -329,7 +337,7 @@ with tabs[0]:
             df_rates = df_rates[(df_rates['Valid_From'] <= context_date) & (df_rates['Valid_To'] >= context_date)]
 
         if 'Carrier' not in df_rates.columns:
-            df_rates['Carrier'] = df_inv['Carrier'].iloc[0]
+            df_rates['Carrier'] = df_inv['Carrier'].iloc[0] if not df_inv.empty else "Kefar Logistics"
             
         if 'Contract_Base' not in df_rates.columns:
             num_cols = df_rates.select_dtypes(include=[np.number]).columns
@@ -391,7 +399,7 @@ with tabs[0]:
     if not df_active.empty:
         total_recovered = df_active[df_active['Total_Overcharge'] > variance_threshold]['Total_Overcharge'].sum()
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("PDFs Processed", len(df_active))
+        c1.metric("Invoices Processed", len(df_active))
         c2.metric("Verified Clean", len(df_active[df_active["Audit_Status"] == "PASSED_VERIFIED"]))
         c3.metric("Capital Saved", f"KES {total_recovered:,.2f}")
         c4.metric("Threshold Applied", f"KES {variance_threshold}")
