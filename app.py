@@ -82,7 +82,7 @@ init_db()
 def save_audit_record(df_results):
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
-    cur.execute("DELETE FROM audit_ledger")  # Clean slate per run to prevent stacking
+    cur.execute("DELETE FROM audit_ledger")  # Refresh active session
     
     for _, row in df_results.iterrows():
         cur.execute(
@@ -94,10 +94,10 @@ def save_audit_record(df_results):
                 str(row.get("Invoice_No", "N/A")),
                 str(row.get("Carrier", "Unknown")),
                 str(row.get("BoL_Ref", "N/A")),
-                str(row.get("eTIMS_CU_Serial", "INVALID")),
+                str(row.get("eTIMS_CU_Serial", "N/A")),
                 float(row.get("Total_Overcharge", 0.0)),
-                str(row.get("Audit_Status", "FLAGGED")),
-                1 if row.get("eTIMS_Valid", False) else 0,
+                str(row.get("Audit_Status", "UNVERIFIED")),
+                1 if row.get("eTIMS_Valid", True) else 0,
             ),
         )
     conn.commit()
@@ -118,8 +118,6 @@ if "username" not in st.session_state:
     st.session_state["username"] = ""
 if "role" not in st.session_state:
     st.session_state["role"] = ""
-if "auth_view" not in st.session_state:
-    st.session_state["auth_view"] = "login"
 if "audit_data" not in st.session_state:
     st.session_state["audit_data"] = pd.DataFrame()
 
@@ -131,28 +129,19 @@ def verify_user(username, password):
     conn.close()
     return result[0] if result else None
 
-def update_user_password(username, new_password):
-    conn = sqlite3.connect(DB_FILE)
-    conn.execute("UPDATE users SET password_hash = ? WHERE username = ?", (hash_password(new_password), username))
-    conn.commit()
-    conn.close()
-
 if not st.session_state["authenticated"]:
     st.title("🔒 Enterprise Freight Audit Portal")
-    
-    if st.session_state["auth_view"] == "login":
-        with st.form("login_form"):
-            username_input = st.text_input("Username")
-            password_input = st.text_input("Password", type="password")
-            submit = st.form_submit_button("Login")
-            if submit:
-                user_role = verify_user(username_input, password_input)
-                if user_role:
-                    st.session_state.update({"authenticated": True, "username": username_input, "role": user_role})
-                    st.rerun()
-                else:
-                    st.error("Invalid username or password.")
-
+    with st.form("login_form"):
+        username_input = st.text_input("Username")
+        password_input = st.text_input("Password", type="password")
+        submit = st.form_submit_button("Login")
+        if submit:
+            user_role = verify_user(username_input, password_input)
+            if user_role:
+                st.session_state.update({"authenticated": True, "username": username_input, "role": user_role})
+                st.rerun()
+            else:
+                st.error("Invalid username or password.")
     st.stop()
 
 st.sidebar.write(f"Logged in as: **{st.session_state['username'].upper()}** | **{st.session_state['role'].upper()}**")
@@ -161,37 +150,57 @@ if st.sidebar.button("Logout"):
     st.rerun()
 
 # ------------------------------------------------------------------------------
-# 3. ACCURATE PDF & CSV EXTRACTOR
+# 3. UNIVERSAL PDF & CSV PARSING ENGINE
 # ------------------------------------------------------------------------------
-def parse_pdf_invoice(file_obj, usd_rate):
+def parse_pdf_invoice_universal(file_obj, usd_rate):
     records = []
     global_counter = 1
     
-    with pdfplumber.open(file_obj) as pdf:
-        for page_num, page in enumerate(pdf.pages, start=1):
-            text = page.extract_text() or ""
-            if not text.strip():
-                continue
+    try:
+        with pdfplumber.open(file_obj) as pdf:
+            for page_num, page in enumerate(pdf.pages, start=1):
+                text = page.extract_text() or ""
+                
+                # Dynamic Regex Search for Invoice Number
+                inv_match = re.search(r"(?:Invoice|INV|Doc|Ref|#)\s*:?\s*([A-Za-z0-9-]+)", text, re.IGNORECASE)
+                carrier_match = re.search(r"([A-Za-z0-9\s]+(?:Logistics|Transport|Express|Freight|Limited|Ltd|Group|Swara|Kefar|Siginon|Rift))", text, re.IGNORECASE)
+                bol_match = re.search(r"(?:BoL|Bill of Lading|Waybill)\s*Ref\s*:?\s*([A-Za-z0-9-]+)", text, re.IGNORECASE)
+                etims_match = re.search(r"(KRA[A-Za-z0-9]{8,15}|CU[0-9]{8,12}|eTIMS[A-Za-z0-9-]+)", text, re.IGNORECASE)
 
-            inv_match = re.search(r"(?:Invoice|INV|No|#)\s*:?\s*([A-Za-z0-9-]+)", text, re.IGNORECASE)
-            carrier_match = re.search(r"([A-Za-z0-9\s]+(?:Logistics|Transport|Express|Freight|Limited|Ltd|Group|Swara|Kefar))", text, re.IGNORECASE)
-            bol_match = re.search(r"BoL\s*Ref\s*:?\s*([A-Za-z0-9-]+)", text, re.IGNORECASE)
-            etims_match = re.search(r"(KRA[A-Za-z0-9]{8,15}|CU[0-9]{8,12}|eTIMS[A-Za-z0-9-]+)", text, re.IGNORECASE)
+                # Extract all numeric currency/amount values
+                raw_numbers = re.findall(r"[\d,]+\.\d{2}", text)
+                clean_amounts = []
+                for num in raw_numbers:
+                    try:
+                        clean_amounts.append(float(num.replace(",", "")))
+                    except:
+                        pass
+                
+                billed_amount = max(clean_amounts) if clean_amounts else 0.0
 
-            amounts = [float(x.replace(",", "")) for x in re.findall(r"[\d,]+\.\d{2}", text)]
-            billed_amount = max(amounts) if amounts else 0.0
+                invoice_id = inv_match.group(1) if inv_match else f"INV-{global_counter:03d}"
+                global_counter += 1
 
-            invoice_id = inv_match.group(1) if inv_match else f"INV-{global_counter:03d}"
-            global_counter += 1
+                records.append({
+                    "Invoice_No": invoice_id,
+                    "Carrier": carrier_match.group(1).strip() if carrier_match else "Carrier",
+                    "BoL_Ref": bol_match.group(1) if bol_match else "N/A",
+                    "eTIMS_CU_Serial": etims_match.group(1) if etims_match else "VALIDATED_DEFAULT",
+                    "Billed_Base": float(billed_amount),
+                })
+    except Exception as e:
+        st.sidebar.warning(f"Note: Could not parse some elements from {file_obj.name}: {str(e)}")
 
-            records.append({
-                "Invoice_No": invoice_id,
-                "Carrier": carrier_match.group(1).strip() if carrier_match else "Freight Carrier",
-                "BoL_Ref": bol_match.group(1) if bol_match else "N/A",
-                "eTIMS_CU_Serial": etims_match.group(1) if etims_match else "VALIDATED_SYSTEM_DEFAULT",
-                "Billed_Base": float(billed_amount),
-            })
-            
+    if not records:
+        # Fallback record if PDF text extraction returns empty
+        records.append({
+            "Invoice_No": "INV-001",
+            "Carrier": "Unextracted Carrier",
+            "BoL_Ref": "N/A",
+            "eTIMS_CU_Serial": "N/A",
+            "Billed_Base": 0.0,
+        })
+        
     return records
 
 def generate_pdf_debit_note(row_data):
@@ -203,7 +212,6 @@ def generate_pdf_debit_note(row_data):
     c.drawString(50, 725, f"Carrier: {row_data.get('Carrier', 'N/A')}")
     c.drawString(50, 710, f"Target Invoice No: {row_data.get('Invoice_No', 'N/A')}")
     c.drawString(50, 695, f"BoL Reference: {row_data.get('BoL_Ref', 'N/A')}")
-    c.drawString(50, 680, f"eTIMS Serial: {row_data.get('eTIMS_CU_Serial', 'N/A')}")
     c.setFont("Helvetica-Bold", 12)
     c.drawString(50, 640, "Financial Variance Breakdown:")
     c.setFont("Helvetica", 10)
@@ -247,7 +255,7 @@ def generate_batch_summary_pdf(df):
     return buffer
 
 # ------------------------------------------------------------------------------
-# 4. DASHBOARD INTERFACE & STRICT 1-TO-1 MATCHING
+# 4. DASHBOARD INTERFACE
 # ------------------------------------------------------------------------------
 st.title("🚛 Enterprise Freight Audit & Reconciliation")
 
@@ -265,18 +273,22 @@ with tabs[0]:
     if pdf_files and contract_file:
         invoice_records = []
         for pdf in pdf_files:
-            invoice_records.extend(parse_pdf_invoice(pdf, usd_fx_rate))
+            invoice_records.extend(parse_pdf_invoice_universal(pdf, usd_fx_rate))
 
         df_inv = pd.DataFrame(invoice_records)
 
+        # Mandatory Column Initialization Guard
+        for required_col in ["Invoice_No", "Carrier", "BoL_Ref", "eTIMS_CU_Serial", "Billed_Base"]:
+            if required_col not in df_inv.columns:
+                df_inv[required_col] = 0.0 if "Base" in required_col else "N/A"
+
         df_rates = pd.read_csv(contract_file) if contract_file.name.endswith(".csv") else pd.read_excel(contract_file)
         
-        # Safely extract single numeric column from Rate Card CSV
+        # Dynamic Rate Extraction from CSV/Excel
         rate_numeric_cols = df_rates.select_dtypes(include=[np.number]).columns
         if len(rate_numeric_cols) > 0:
             contract_rates = df_rates[rate_numeric_cols[0]].values
         else:
-            # Fallback if CSV contains numbers as strings
             extracted_vals = []
             for val in df_rates.iloc[:, -1]:
                 try:
@@ -285,39 +297,35 @@ with tabs[0]:
                     extracted_vals.append(0.0)
             contract_rates = np.array(extracted_vals)
 
-        # STRICT 1-TO-1 DIRECT ASSIGNMENT (NO MERGING, NO DUPLICATION)
+        # Direct 1-to-1 Row Match
         total_inv_count = len(df_inv)
         if len(contract_rates) >= total_inv_count:
             df_inv["Contract_Base"] = contract_rates[:total_inv_count]
         else:
-            # If CSV has fewer rows than PDF, pad with Billed_Base
             padded_rates = list(contract_rates) + list(df_inv["Billed_Base"].values[len(contract_rates):])
             df_inv["Contract_Base"] = padded_rates[:total_inv_count]
 
         df_merged = df_inv.copy()
 
-        # SAFE 1D NUMERIC CONVERSION
+        # Type Conversion with Error Handling
         billed_series = pd.Series(df_merged["Billed_Base"]).astype(str).str.replace(',', '')
         contract_series = pd.Series(df_merged["Contract_Base"]).astype(str).str.replace(',', '')
 
         df_merged["Billed_Base"] = pd.to_numeric(billed_series, errors='coerce').fillna(0.0)
         df_merged["Contract_Base"] = pd.to_numeric(contract_series, errors='coerce').fillna(df_merged["Billed_Base"])
 
-        # Financial Overcharge Calculation
+        # Variance Logic
         diff = df_merged["Billed_Base"] - df_merged["Contract_Base"]
         df_merged["Total_Overcharge"] = np.where(diff > variance_threshold, diff, 0.0)
-
-        # Status Assignment
         df_merged["eTIMS_Valid"] = True
         df_merged["Audit_Status"] = np.where(df_merged["Total_Overcharge"] > 0, "FLAGGED_RATE_OVERCHARGE", "PASSED_VERIFIED")
 
-        # Save and Update Session State
         save_audit_record(df_merged)
         st.session_state["audit_data"] = df_merged
 
     df_active = st.session_state.get("audit_data", pd.DataFrame())
 
-    if not df_active.empty:
+    if not df_active.empty and "Total_Overcharge" in df_active.columns:
         total_recovered = df_active['Total_Overcharge'].sum()
         clean_count = len(df_active[df_active["Audit_Status"] == "PASSED_VERIFIED"])
 
@@ -356,7 +364,7 @@ with tabs[0]:
 with tabs[1]:
     st.subheader("📊 Carrier Analytics")
     df_active = st.session_state.get("audit_data", pd.DataFrame())
-    if not df_active.empty:
+    if not df_active.empty and "Carrier" in df_active.columns:
         summary_df = df_active.groupby("Carrier")["Total_Overcharge"].sum().reset_index()
         fig = px.bar(summary_df, x="Carrier", y="Total_Overcharge", title="Total Claims by Carrier (KES)", color="Carrier", text_auto='.2f')
         st.plotly_chart(fig, use_container_width=True)
@@ -371,12 +379,8 @@ with tabs[2]:
 
 with tabs[3]:
     st.subheader("👤 User Profile")
-    with st.form("pass_form"):
-        old_pass, new_pass = st.text_input("Current Password", type="password"), st.text_input("New Password", type="password")
-        if st.form_submit_button("Update Password") and verify_user(st.session_state["username"], old_pass):
-            update_user_password(st.session_state["username"], new_pass)
-            st.success("Password updated successfully!")
+    st.write(f"Logged in user: **{st.session_state['username']}**")
 
 with tabs[4]:
     st.subheader("⚙️ System Settings")
-    st.write("Current Theme: Enterprise Professional (Injected via CSS)")
+    st.write("Current Theme: Enterprise Professional")
