@@ -161,13 +161,13 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
             for page_num, page in enumerate(pdf.pages, start=1):
                 text = page.extract_text() or ""
                 
-                # Dynamic Regex Search for Invoice Number
+                # Regex matchers
                 inv_match = re.search(r"(?:Invoice|INV|Doc|Ref|#)\s*:?\s*([A-Za-z0-9-]+)", text, re.IGNORECASE)
                 carrier_match = re.search(r"([A-Za-z0-9\s]+(?:Logistics|Transport|Express|Freight|Limited|Ltd|Group|Swara|Kefar|Siginon|Rift))", text, re.IGNORECASE)
                 bol_match = re.search(r"(?:BoL|Bill of Lading|Waybill)\s*Ref\s*:?\s*([A-Za-z0-9-]+)", text, re.IGNORECASE)
                 etims_match = re.search(r"(KRA[A-Za-z0-9]{8,15}|CU[0-9]{8,12}|eTIMS[A-Za-z0-9-]+)", text, re.IGNORECASE)
 
-                # Extract all numeric currency/amount values
+                # Numbers/Amounts extraction
                 raw_numbers = re.findall(r"[\d,]+\.\d{2}", text)
                 clean_amounts = []
                 for num in raw_numbers:
@@ -177,7 +177,6 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
                         pass
                 
                 billed_amount = max(clean_amounts) if clean_amounts else 0.0
-
                 invoice_id = inv_match.group(1) if inv_match else f"INV-{global_counter:03d}"
                 global_counter += 1
 
@@ -189,10 +188,9 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
                     "Billed_Base": float(billed_amount),
                 })
     except Exception as e:
-        st.sidebar.warning(f"Note: Could not parse some elements from {file_obj.name}: {str(e)}")
+        st.sidebar.warning(f"Note: Extraction issue in {file_obj.name}: {str(e)}")
 
     if not records:
-        # Fallback record if PDF text extraction returns empty
         records.append({
             "Invoice_No": "INV-001",
             "Carrier": "Unextracted Carrier",
@@ -255,7 +253,7 @@ def generate_batch_summary_pdf(df):
     return buffer
 
 # ------------------------------------------------------------------------------
-# 4. DASHBOARD INTERFACE
+# 4. DASHBOARD INTERFACE & ACCURATE AUDIT ENGINE
 # ------------------------------------------------------------------------------
 st.title("🚛 Enterprise Freight Audit & Reconciliation")
 
@@ -277,42 +275,44 @@ with tabs[0]:
 
         df_inv = pd.DataFrame(invoice_records)
 
-        # Mandatory Column Initialization Guard
-        for required_col in ["Invoice_No", "Carrier", "BoL_Ref", "eTIMS_CU_Serial", "Billed_Base"]:
-            if required_col not in df_inv.columns:
-                df_inv[required_col] = 0.0 if "Base" in required_col else "N/A"
-
+        # Rate Card Processing
         df_rates = pd.read_csv(contract_file) if contract_file.name.endswith(".csv") else pd.read_excel(contract_file)
-        
-        # Dynamic Rate Extraction from CSV/Excel
-        rate_numeric_cols = df_rates.select_dtypes(include=[np.number]).columns
-        if len(rate_numeric_cols) > 0:
-            contract_rates = df_rates[rate_numeric_cols[0]].values
-        else:
-            extracted_vals = []
-            for val in df_rates.iloc[:, -1]:
-                try:
-                    extracted_vals.append(float(str(val).replace(',', '')))
-                except:
-                    extracted_vals.append(0.0)
-            contract_rates = np.array(extracted_vals)
+        df_rates.columns = [str(c).strip() for c in df_rates.columns]
 
-        # Direct 1-to-1 Row Match
+        # Locate Rate Column in CSV
+        rate_col = None
+        for col in df_rates.columns:
+            if any(kw in col.lower() for kw in ["contract", "base", "rate", "price", "amount", "kes"]):
+                rate_col = col
+                break
+                
+        if not rate_col:
+            num_cols = df_rates.select_dtypes(include=[np.number]).columns
+            rate_col = num_cols[0] if len(num_cols) > 0 else df_rates.columns[-1]
+
+        # Numeric Extraction for Rate Card
+        df_rates[rate_col] = pd.to_numeric(
+            df_rates[rate_col].astype(str).str.replace(',', '').str.extract(r'([\d\.]+)')[0], 
+            errors='coerce'
+        ).fillna(0.0)
+
+        # Numeric Extraction for PDF Invoices
+        df_inv["Billed_Base"] = pd.to_numeric(
+            df_inv["Billed_Base"].astype(str).str.replace(',', '').str.extract(r'([\d\.]+)')[0], 
+            errors='coerce'
+        ).fillna(0.0)
+
+        # 1-to-1 Mapping Guard
+        contract_rates = df_rates[rate_col].values
         total_inv_count = len(df_inv)
+        
         if len(contract_rates) >= total_inv_count:
             df_inv["Contract_Base"] = contract_rates[:total_inv_count]
         else:
-            padded_rates = list(contract_rates) + list(df_inv["Billed_Base"].values[len(contract_rates):])
+            padded_rates = list(contract_rates) + [0.0] * (total_inv_count - len(contract_rates))
             df_inv["Contract_Base"] = padded_rates[:total_inv_count]
 
         df_merged = df_inv.copy()
-
-        # Type Conversion with Error Handling
-        billed_series = pd.Series(df_merged["Billed_Base"]).astype(str).str.replace(',', '')
-        contract_series = pd.Series(df_merged["Contract_Base"]).astype(str).str.replace(',', '')
-
-        df_merged["Billed_Base"] = pd.to_numeric(billed_series, errors='coerce').fillna(0.0)
-        df_merged["Contract_Base"] = pd.to_numeric(contract_series, errors='coerce').fillna(df_merged["Billed_Base"])
 
         # Variance Logic
         diff = df_merged["Billed_Base"] - df_merged["Contract_Base"]
