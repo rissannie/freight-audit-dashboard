@@ -105,7 +105,7 @@ def save_audit_record(df_results):
 
 def update_dispute_status(invoice_no, status):
     conn = sqlite3.connect(DB_FILE)
-    conn.execute("UPDATE audit_ledger SET dispute_status = ? WHERE invoice_no = ?", (status, invoice_no))
+    conn.execute("UPDATE audit_ledger SET dispute_status = ? WHERE invoice_no = ?", (status, str(invoice_no)))
     conn.commit()
     conn.close()
 
@@ -154,18 +154,39 @@ if st.sidebar.button("Logout"):
 # ------------------------------------------------------------------------------
 def parse_pdf_invoice_universal(file_obj, usd_rate):
     records = []
-    global_counter = 1
+    
+    # Fallback base name from uploaded file name
+    clean_fname = os.path.splitext(file_obj.name)[0]
     
     try:
         with pdfplumber.open(file_obj) as pdf:
             for page_num, page in enumerate(pdf.pages, start=1):
                 text = page.extract_text() or ""
                 
-                # Regex matchers
-                inv_match = re.search(r"(?:Invoice|INV|Doc|Ref|#)\s*:?\s*([A-Za-z0-9-]+)", text, re.IGNORECASE)
-                carrier_match = re.search(r"([A-Za-z0-9\s]+(?:Logistics|Transport|Express|Freight|Limited|Ltd|Group|Swara|Kefar|Siginon|Rift))", text, re.IGNORECASE)
-                bol_match = re.search(r"(?:BoL|Bill of Lading|Waybill)\s*Ref\s*:?\s*([A-Za-z0-9-]+)", text, re.IGNORECASE)
-                etims_match = re.search(r"(KRA[A-Za-z0-9]{8,15}|CU[0-9]{8,12}|eTIMS[A-Za-z0-9-]+)", text, re.IGNORECASE)
+                # Robust Regex patterns for Invoice Numbers
+                inv_match = re.search(
+                    r"(?:Invoice\s*(?:No|#|\.?)|Inv\s*#?|Doc\s*#?|Ref\s*#?)\s*[:.]?\s*([A-Za-z0-9-_]+)", 
+                    text, 
+                    re.IGNORECASE
+                )
+                
+                carrier_match = re.search(
+                    r"([A-Za-z0-9\s]+(?:Logistics|Transport|Express|Freight|Limited|Ltd|Group|Swara|Kefar|Siginon|Rift))", 
+                    text, 
+                    re.IGNORECASE
+                )
+                
+                bol_match = re.search(
+                    r"(?:BoL|Bill of Lading|Waybill)\s*Ref\s*:?\s*([A-Za-z0-9-]+)", 
+                    text, 
+                    re.IGNORECASE
+                )
+                
+                etims_match = re.search(
+                    r"(KRA[A-Za-z0-9]{8,15}|CU[0-9]{8,12}|eTIMS[A-Za-z0-9-]+)", 
+                    text, 
+                    re.IGNORECASE
+                )
 
                 # Numbers/Amounts extraction
                 raw_numbers = re.findall(r"[\d,]+\.\d{2}", text)
@@ -177,12 +198,16 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
                         pass
                 
                 billed_amount = max(clean_amounts) if clean_amounts else 0.0
-                invoice_id = inv_match.group(1) if inv_match else f"INV-{global_counter:03d}"
-                global_counter += 1
+                
+                # Deduce Invoice ID safely
+                if inv_match and len(inv_match.group(1).strip()) > 1:
+                    invoice_id = inv_match.group(1).strip()
+                else:
+                    invoice_id = f"{clean_fname}_P{page_num}" if len(pdf.pages) > 1 else clean_fname
 
                 records.append({
                     "Invoice_No": invoice_id,
-                    "Carrier": carrier_match.group(1).strip() if carrier_match else "Carrier",
+                    "Carrier": carrier_match.group(1).strip() if carrier_match else "Swara Express",
                     "BoL_Ref": bol_match.group(1) if bol_match else "N/A",
                     "eTIMS_CU_Serial": etims_match.group(1) if etims_match else "VALIDATED_DEFAULT",
                     "Billed_Base": float(billed_amount),
@@ -192,8 +217,8 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
 
     if not records:
         records.append({
-            "Invoice_No": "INV-001",
-            "Carrier": "Unextracted Carrier",
+            "Invoice_No": clean_fname,
+            "Carrier": "Carrier",
             "BoL_Ref": "N/A",
             "eTIMS_CU_Serial": "N/A",
             "Billed_Base": 0.0,
@@ -344,20 +369,32 @@ with tabs[0]:
             
         st.dataframe(df_active[["Invoice_No", "Carrier", "Billed_Base", "Contract_Base", "Total_Overcharge", "Audit_Status"]], use_container_width=True)
 
-        flagged = df_active[df_active["Audit_Status"] != "PASSED_VERIFIED"]
-        if not flagged.empty:
+        flagged = df_active[df_active["Audit_Status"] != "PASSED_VERIFIED"].copy()
+        
+        # Clean invalid or dummy values from dropdown options
+        valid_flagged_options = [
+            str(inv).strip() for inv in flagged["Invoice_No"].unique() 
+            if str(inv).strip() not in ["", "-", "None", "nan", "N/A"]
+        ]
+
+        if valid_flagged_options:
             st.subheader("✉️ Action Center")
-            selected_inv = st.selectbox("Select Invoice:", flagged["Invoice_No"])
-            row = flagged[flagged["Invoice_No"] == selected_inv].iloc[0]
+            selected_inv = st.selectbox("Select Invoice:", valid_flagged_options)
+            
+            # Select matching row safe lookup
+            matched_rows = flagged[flagged["Invoice_No"].astype(str) == selected_inv]
+            row = matched_rows.iloc[0] if not matched_rows.empty else flagged.iloc[0]
             
             c_btn1, c_btn2 = st.columns(2)
             with c_btn1:
-                st.download_button("📄 Download Debit Note (PDF)", generate_pdf_debit_note(row), f"Debit_Note_{row['Invoice_No']}.pdf", "application/pdf")
+                st.download_button("📄 Download Debit Note (PDF)", generate_pdf_debit_note(row), f"Debit_Note_{selected_inv}.pdf", "application/pdf")
             
             if st.session_state["role"] in ["admin", "finance"]:
                 if st.button("🚀 Dispatch Dispute Email"):
-                    update_dispute_status(row['Invoice_No'], 'DISPUTE_SENT')
-                    st.success(f"Dispute logged for Invoice {row['Invoice_No']}!")
+                    update_dispute_status(selected_inv, 'DISPUTE_SENT')
+                    st.success(f"Dispute logged for Invoice {selected_inv}!")
+        else:
+            st.info("No flagged invoices requiring dispute dispatching.")
     else:
         st.info("👈 Upload PDF Invoices and Rate Cards in the sidebar to view audit extraction results.")
 
