@@ -2,8 +2,9 @@ import os
 import re
 import sqlite3
 import hashlib
+import urllib.parse
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -184,7 +185,7 @@ if st.sidebar.button("Logout"):
     st.rerun()
 
 # ------------------------------------------------------------------------------
-# 3. UNIVERSAL PDF & CSV PARSING ENGINE
+# 3. UNIVERSAL PDF & CSV PARSING ENGINE (FEATURE 1 & 2 ENHANCED)
 # ------------------------------------------------------------------------------
 def parse_pdf_invoice_universal(file_obj, usd_rate):
     records = []
@@ -207,10 +208,16 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
                     r"(?:BoL|Bill of Lading|Waybill)\s*Ref\s*:?\s*([A-Za-z0-9-]+)", 
                     text, re.IGNORECASE
                 )
+                
+                # FEATURE 1: Enhanced KRA eTIMS CU Serial & QR pattern extraction
                 etims_match = re.search(
-                    r"(KRA[A-Za-z0-9]{8,15}|CU[0-9]{8,12}|eTIMS[A-Za-z0-9-]+)", 
+                    r"(KRA[A-Za-z0-9]{8,15}|CU[0-9]{8,12}|eTIMS[A-Za-z0-9-]+|KRA\d{11,14})", 
                     text, re.IGNORECASE
                 )
+
+                # FEATURE 2: FX Rate Detection within Invoice Text
+                fx_match = re.search(r"(?:FX|Rate|Exchange\s*Rate|USD/KES)\s*[:=]?\s*(\d{2,3}\.\d{2})", text, re.IGNORECASE)
+                billed_fx = float(fx_match.group(1)) if fx_match else usd_rate
 
                 raw_numbers = re.findall(r"[\d,]+\.\d{2}", text)
                 clean_amounts = [float(n.replace(",", "")) for n in raw_numbers if n.replace(",", "").replace(".", "").isdigit()]
@@ -221,11 +228,17 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
                 else:
                     invoice_id = f"{clean_fname}_P{page_num}" if len(pdf.pages) > 1 else clean_fname
 
+                # Validate eTIMS presence
+                etims_serial = etims_match.group(1) if etims_match else "MISSING_ETIMS_CU"
+                is_etims_valid = etims_serial != "MISSING_ETIMS_CU"
+
                 records.append({
                     "Invoice_No": invoice_id,
                     "Carrier": carrier_match.group(1).strip() if carrier_match else "Swara Express",
                     "BoL_Ref": bol_match.group(1) if bol_match else "N/A",
-                    "eTIMS_CU_Serial": etims_match.group(1) if etims_match else "VALIDATED_DEFAULT",
+                    "eTIMS_CU_Serial": etims_serial,
+                    "eTIMS_Valid": is_etims_valid,
+                    "Billed_FX_Rate": billed_fx,
                     "Billed_Base": float(billed_amount),
                 })
     except Exception as e:
@@ -236,7 +249,9 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
             "Invoice_No": clean_fname,
             "Carrier": "Carrier",
             "BoL_Ref": "N/A",
-            "eTIMS_CU_Serial": "N/A",
+            "eTIMS_CU_Serial": "MISSING_ETIMS_CU",
+            "eTIMS_Valid": False,
+            "Billed_FX_Rate": usd_rate,
             "Billed_Base": 0.0,
         })
         
@@ -251,12 +266,14 @@ def generate_pdf_debit_note(row_data):
     c.drawString(50, 725, f"Carrier: {row_data.get('Carrier', 'N/A')}")
     c.drawString(50, 710, f"Target Invoice No: {row_data.get('Invoice_No', 'N/A')}")
     c.drawString(50, 695, f"BoL Reference: {row_data.get('BoL_Ref', 'N/A')}")
+    c.drawString(50, 680, f"eTIMS CU Serial: {row_data.get('eTIMS_CU_Serial', 'N/A')}")
     c.setFont("Helvetica-Bold", 12)
-    c.drawString(50, 640, "Financial Variance Breakdown:")
+    c.drawString(50, 630, "Financial Variance Breakdown:")
     c.setFont("Helvetica", 10)
-    c.drawString(70, 620, f"- Billed Base Rate: KES {row_data.get('Billed_Base', 0.0):,.2f}")
-    c.drawString(70, 605, f"- Contract Base Rate: KES {row_data.get('Contract_Base', 0.0):,.2f}")
-    c.drawString(70, 590, f"- Total Claimed Debit Overcharge: KES {row_data.get('Total_Overcharge', 0.0):,.2f}")
+    c.drawString(70, 610, f"- Billed Base Rate: KES {row_data.get('Billed_Base', 0.0):,.2f}")
+    c.drawString(70, 595, f"- Contract Base Rate: KES {row_data.get('Contract_Base', 0.0):,.2f}")
+    c.drawString(70, 580, f"- FX Overcharge Premium: KES {row_data.get('FX_Overcharge', 0.0):,.2f}")
+    c.drawString(70, 565, f"- Total Claimed Debit Overcharge: KES {row_data.get('Total_Overcharge', 0.0):,.2f}")
     c.showPage()
     c.save()
     buffer.seek(0)
@@ -271,14 +288,15 @@ def generate_batch_summary_pdf(df):
     elements.append(Paragraph(f"Executive Batch Audit Summary - {datetime.now().strftime('%Y-%m-%d')}", styles['Title']))
     elements.append(Spacer(1, 12))
     
-    data = [["Invoice No", "Carrier", "BoL Ref", "Overcharge (KES)", "Status"]]
+    data = [["Invoice No", "Carrier", "BoL Ref", "eTIMS Status", "Overcharge (KES)", "Status"]]
     for _, row in df.iterrows():
+        etims_status = "VALID" if row.get("eTIMS_Valid", True) else "NON_COMPLIANT"
         data.append([
-            str(row.get("Invoice_No", "N/A")), str(row.get("Carrier", "N/A")), str(row.get("BoL_Ref", "N/A")), 
-            f"{row.get('Total_Overcharge', 0.0):,.2f}", str(row.get("Audit_Status", "N/A"))
+            str(row.get("Invoice_No", "N/A")), str(row.get("Carrier", "N/A")), str(row.get("BoL_Ref", "N/A")),
+            etims_status, f"{row.get('Total_Overcharge', 0.0):,.2f}", str(row.get("Audit_Status", "N/A"))
         ])
         
-    table = Table(data, colWidths=[100, 150, 100, 120, 200])
+    table = Table(data, colWidths=[100, 130, 90, 100, 110, 170])
     table.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1E3A8A")),
         ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
@@ -298,11 +316,11 @@ def generate_batch_summary_pdf(df):
 # ------------------------------------------------------------------------------
 st.title("🚛 Enterprise Freight Audit & Reconciliation")
 
-tabs = st.tabs(["📋 Active Audit Engine", "📊 Carrier Scorecards", "📜 Dispute Ledger", "👤 User Profile", "⚙️ Settings"])
+tabs = st.tabs(["📋 Active Audit Engine", "⚓ Port Demurrage Tool", "📊 Carrier Scorecards", "📜 Dispute Ledger", "👤 User Profile"])
 
 with tabs[0]:
     st.sidebar.header("⚙️ Global Audit Parameters")
-    usd_fx_rate = st.sidebar.number_input("USD to KES Exchange Rate", value=130.0, step=1.0)
+    usd_fx_rate = st.sidebar.number_input("CBK Benchmark FX Rate (USD to KES)", value=130.0, step=0.5)
     variance_threshold = st.sidebar.slider("Overcharge Ignore Threshold (KES)", 0, 5000, 100)
     
     st.sidebar.header("📁 Upload Documents")
@@ -350,10 +368,23 @@ with tabs[0]:
 
         df_merged = df_inv.copy()
 
-        diff = df_merged["Billed_Base"] - df_merged["Contract_Base"]
-        df_merged["Total_Overcharge"] = np.where(diff > variance_threshold, diff, 0.0)
-        df_merged["eTIMS_Valid"] = True
-        df_merged["Audit_Status"] = np.where(df_merged["Total_Overcharge"] > 0, "FLAGGED_RATE_OVERCHARGE", "PASSED_VERIFIED")
+        # FEATURE 1: FX Rate Overcharge Audit Logic
+        fx_diff = np.maximum(0.0, df_merged["Billed_FX_Rate"] - usd_fx_rate)
+        df_merged["FX_Overcharge"] = (df_merged["Billed_Base"] / usd_fx_rate) * fx_diff
+
+        # Rate Variance Logic
+        rate_diff = df_merged["Billed_Base"] - df_merged["Contract_Base"]
+        base_overcharge = np.where(rate_diff > variance_threshold, rate_diff, 0.0)
+
+        df_merged["Total_Overcharge"] = base_overcharge + df_merged["FX_Overcharge"]
+        
+        # FEATURE 2: eTIMS Status flagging
+        conditions = [
+            (~df_merged["eTIMS_Valid"]),
+            (df_merged["Total_Overcharge"] > 0)
+        ]
+        choices = ["FLAGGED_INVALID_ETIMS", "FLAGGED_RATE_OVERCHARGE"]
+        df_merged["Audit_Status"] = np.select(conditions, choices, default="PASSED_VERIFIED")
 
         save_audit_record(df_merged)
         st.session_state["audit_data"] = df_merged
@@ -363,12 +394,13 @@ with tabs[0]:
     if not df_active.empty and "Total_Overcharge" in df_active.columns:
         total_recovered = df_active['Total_Overcharge'].sum()
         clean_count = len(df_active[df_active["Audit_Status"] == "PASSED_VERIFIED"])
+        invalid_etims_count = len(df_active[~df_active["eTIMS_Valid"]])
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Invoices Processed", len(df_active))
         c2.metric("Verified Clean", clean_count)
         c3.metric("Capital Saved", f"KES {total_recovered:,.2f}")
-        c4.metric("Threshold Applied", f"KES {variance_threshold}")
+        c4.metric("Non-Compliant eTIMS", invalid_etims_count)
 
         st.markdown("---")
         c_left, c_right = st.columns([3, 1])
@@ -377,7 +409,10 @@ with tabs[0]:
         with c_right:
             st.download_button("📥 Executive PDF Report", generate_batch_summary_pdf(df_active), "Batch_Summary.pdf", "application/pdf")
             
-        st.dataframe(df_active[["Invoice_No", "Carrier", "Billed_Base", "Contract_Base", "Total_Overcharge", "Audit_Status"]], use_container_width=True)
+        st.dataframe(
+            df_active[["Invoice_No", "Carrier", "Billed_Base", "Contract_Base", "Billed_FX_Rate", "eTIMS_CU_Serial", "Total_Overcharge", "Audit_Status"]], 
+            use_container_width=True
+        )
 
         flagged = df_active[df_active["Audit_Status"] != "PASSED_VERIFIED"].copy()
         
@@ -397,25 +432,32 @@ with tabs[0]:
             email_subject = f"DISPUTE NOTICE: Invoice Discrepancy #{selected_inv} - {row['Carrier']}"
             email_body = f"""Dear Accounts Receivable Team ({row['Carrier']}),
 
-We are formally disputing the charges associated with Invoice #{selected_inv} (BoL Ref: {row['BoL_Ref']}).
+We are formally disputing charges on Invoice #{selected_inv} (BoL Ref: {row['BoL_Ref']}).
 
-Discrepancy Details:
+Audit Variance Breakdown:
 ------------------------------------------
-- Billed Base Amount: KES {row['Billed_Base']:,.2f}
-- Agreed Contract Rate: KES {row['Contract_Base']:,.2f}
-- Total Overcharge Claim: KES {row['Total_Overcharge']:,.2f}
+- Billed Amount: KES {row['Billed_Base']:,.2f}
+- Contract Base Rate: KES {row['Contract_Base']:,.2f}
+- FX Rate Applied: {row['Billed_FX_Rate']} (Benchmark: {usd_fx_rate})
+- eTIMS CU Status: {row['eTIMS_CU_Serial']}
+- Total Claimed Debit Overcharge: KES {row['Total_Overcharge']:,.2f}
 
-Please issue a revised invoice or a credit note for KES {row['Total_Overcharge']:,.2f} at your earliest convenience.
+Please issue a credit note for KES {row['Total_Overcharge']:,.2f} at your earliest convenience.
 
 Best regards,
 Freight Audit Team
 {st.session_state['username'].title()} ({st.session_state['role'].upper()})
 """
 
+            # FEATURE 4: Pre-formatted WhatsApp Message & Link Generator
+            whatsapp_text = f"Hello {row['Carrier']} Team. Re: Invoice #{selected_inv} (BoL: {row['BoL_Ref']}). Our audit flagged a variance of KES {row['Total_Overcharge']:,.2f}. Please review the formal debit note sent to your email."
+            whatsapp_url = f"https://wa.me/?text={urllib.parse.quote(whatsapp_text)}"
+
             # Email Content Preview Box
-            with st.expander("✉️ Preview Dispute Email Details", expanded=True):
+            with st.expander("✉️ Preview Dispute Message & Dispatch Options", expanded=True):
                 st.text_input("Subject:", value=email_subject, disabled=True)
-                st.text_area("Message Body:", value=email_body, height=200)
+                st.text_area("Message Body:", value=email_body, height=180)
+                st.markdown(f"[📲 Send Dispute Summary via WhatsApp]({whatsapp_url})", unsafe_allow_html=True)
 
             c_btn1, c_btn2 = st.columns(2)
             with c_btn1:
@@ -430,7 +472,41 @@ Freight Audit Team
     else:
         st.info("👈 Upload PDF Invoices and Rate Cards in the sidebar to view audit extraction results.")
 
+# FEATURE 3: MOMBASA PORT & ICD DEMURRAGE CALCULATOR TAB
 with tabs[1]:
+    st.subheader("⚓ Mombasa Port & ICD Demurrage Auditor")
+    st.write("Calculate free-period allowances and audit container detention charges.")
+
+    col_d1, col_d2 = st.columns(2)
+    with col_d1:
+        shipment_type = st.selectbox("Shipment Destination Type", ["Local Import (7 Free Days)", "Transit Cargo (14 Free Days)"])
+        gate_out_date = st.date_input("Discharge Date at Port", value=datetime.today() - timedelta(days=12))
+        return_date = st.date_input("Empty Container Return Date", value=datetime.today())
+        container_count = st.number_input("Number of Containers", min_value=1, value=2)
+
+    with col_d2:
+        daily_demurrage_usd = st.number_input("Daily Demurrage Rate per Container (USD)", value=40.0)
+        billed_demurrage_kes = st.number_input("Demurrage Amount Billed by Carrier (KES)", value=65000.0)
+
+    # Calculation Logic
+    free_days = 7 if "Local" in shipment_type else 14
+    total_days = (return_date - gate_out_date).days
+    chargeable_days = max(0, total_days - free_days)
+    
+    expected_demurrage_usd = chargeable_days * daily_demurrage_usd * container_count
+    expected_demurrage_kes = expected_demurrage_usd * usd_fx_rate
+    demurrage_overcharge = max(0.0, billed_demurrage_kes - expected_demurrage_kes)
+
+    st.markdown("---")
+    res_c1, res_c2, res_c3 = st.columns(3)
+    res_c1.metric("Days Port-to-Return", f"{total_days} Days")
+    res_c2.metric("Chargeable Days", f"{chargeable_days} Days (Free: {free_days})")
+    res_c3.metric("Demurrage Overcharge Claim", f"KES {demurrage_overcharge:,.2f}")
+
+    if demurrage_overcharge > 0:
+        st.error(f"⚠️ Flagged Demurrage Overcharge: Carrier overbilled by KES {demurrage_overcharge:,.2f}.")
+
+with tabs[2]:
     st.subheader("📊 Carrier Analytics")
     df_active = st.session_state.get("audit_data", pd.DataFrame())
     if not df_active.empty and "Carrier" in df_active.columns:
@@ -438,7 +514,7 @@ with tabs[1]:
         fig = px.bar(summary_df, x="Carrier", y="Total_Overcharge", title="Total Claims by Carrier (KES)", color="Carrier", text_auto='.2f')
         st.plotly_chart(fig, use_container_width=True)
 
-with tabs[2]:
+with tabs[3]:
     st.subheader("📜 Audit Trail & Dispute History")
     conn = sqlite3.connect(DB_FILE)
     df_ledger = pd.read_sql_query("SELECT timestamp, invoice_no, carrier, total_overcharge, audit_status, dispute_status FROM audit_ledger ORDER BY timestamp DESC", conn)
@@ -446,10 +522,6 @@ with tabs[2]:
     if not df_ledger.empty:
         st.dataframe(df_ledger, use_container_width=True)
 
-with tabs[3]:
-    st.subheader("👤 User Profile")
-    st.write(f"Logged in user: **{st.session_state['username']}**")
-
 with tabs[4]:
-    st.subheader("⚙️ System Settings")
-    st.write("Current Theme: Enterprise Professional")
+    st.subheader("👤 User Profile")
+    st.write(f"Logged in user: **{st.session_state['username']}** | Role: **{st.session_state['role']}**")
