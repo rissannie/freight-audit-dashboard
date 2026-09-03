@@ -109,8 +109,20 @@ def update_dispute_status(invoice_no, status):
     conn.commit()
     conn.close()
 
+def reset_password(username, new_password):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute("SELECT username FROM users WHERE username = ?", (username,))
+    if cur.fetchone():
+        cur.execute("UPDATE users SET password_hash = ? WHERE username = ?", (hash_password(new_password), username))
+        conn.commit()
+        conn.close()
+        return True
+    conn.close()
+    return False
+
 # ------------------------------------------------------------------------------
-# 2. AUTHENTICATION & SESSION STATE INITIALIZATION
+# 2. AUTHENTICATION & FORGOT PASSWORD LOGIC
 # ------------------------------------------------------------------------------
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
@@ -131,17 +143,39 @@ def verify_user(username, password):
 
 if not st.session_state["authenticated"]:
     st.title("🔒 Enterprise Freight Audit Portal")
-    with st.form("login_form"):
-        username_input = st.text_input("Username")
-        password_input = st.text_input("Password", type="password")
-        submit = st.form_submit_button("Login")
-        if submit:
-            user_role = verify_user(username_input, password_input)
-            if user_role:
-                st.session_state.update({"authenticated": True, "username": username_input, "role": user_role})
-                st.rerun()
-            else:
-                st.error("Invalid username or password.")
+    
+    auth_mode = st.radio("Choose Action:", ["Login", "Forgot Password"], horizontal=True)
+
+    if auth_mode == "Login":
+        with st.form("login_form"):
+            username_input = st.text_input("Username")
+            password_input = st.text_input("Password", type="password")
+            submit = st.form_submit_button("Login")
+            if submit:
+                user_role = verify_user(username_input, password_input)
+                if user_role:
+                    st.session_state.update({"authenticated": True, "username": username_input, "role": user_role})
+                    st.rerun()
+                else:
+                    st.error("Invalid username or password.")
+    else:
+        with st.form("reset_password_form"):
+            st.subheader("🔑 Reset Your Password")
+            reset_username = st.text_input("Username")
+            new_password = st.text_input("New Password", type="password")
+            confirm_password = st.text_input("Confirm New Password", type="password")
+            reset_submit = st.form_submit_button("Update Password")
+
+            if reset_submit:
+                if not reset_username or not new_password:
+                    st.error("All fields are required.")
+                elif new_password != confirm_password:
+                    st.error("Passwords do not match.")
+                else:
+                    if reset_password(reset_username, new_password):
+                        st.success("Password successfully updated! Please switch back to Login.")
+                    else:
+                        st.error("Username not found.")
     st.stop()
 
 st.sidebar.write(f"Logged in as: **{st.session_state['username'].upper()}** | **{st.session_state['role'].upper()}**")
@@ -154,8 +188,6 @@ if st.sidebar.button("Logout"):
 # ------------------------------------------------------------------------------
 def parse_pdf_invoice_universal(file_obj, usd_rate):
     records = []
-    
-    # Fallback base name from uploaded file name
     clean_fname = os.path.splitext(file_obj.name)[0]
     
     try:
@@ -163,43 +195,27 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
             for page_num, page in enumerate(pdf.pages, start=1):
                 text = page.extract_text() or ""
                 
-                # Robust Regex patterns for Invoice Numbers
                 inv_match = re.search(
                     r"(?:Invoice\s*(?:No|#|\.?)|Inv\s*#?|Doc\s*#?|Ref\s*#?)\s*[:.]?\s*([A-Za-z0-9-_]+)", 
-                    text, 
-                    re.IGNORECASE
+                    text, re.IGNORECASE
                 )
-                
                 carrier_match = re.search(
                     r"([A-Za-z0-9\s]+(?:Logistics|Transport|Express|Freight|Limited|Ltd|Group|Swara|Kefar|Siginon|Rift))", 
-                    text, 
-                    re.IGNORECASE
+                    text, re.IGNORECASE
                 )
-                
                 bol_match = re.search(
                     r"(?:BoL|Bill of Lading|Waybill)\s*Ref\s*:?\s*([A-Za-z0-9-]+)", 
-                    text, 
-                    re.IGNORECASE
+                    text, re.IGNORECASE
                 )
-                
                 etims_match = re.search(
                     r"(KRA[A-Za-z0-9]{8,15}|CU[0-9]{8,12}|eTIMS[A-Za-z0-9-]+)", 
-                    text, 
-                    re.IGNORECASE
+                    text, re.IGNORECASE
                 )
 
-                # Numbers/Amounts extraction
                 raw_numbers = re.findall(r"[\d,]+\.\d{2}", text)
-                clean_amounts = []
-                for num in raw_numbers:
-                    try:
-                        clean_amounts.append(float(num.replace(",", "")))
-                    except:
-                        pass
-                
+                clean_amounts = [float(n.replace(",", "")) for n in raw_numbers if n.replace(",", "").replace(".", "").isdigit()]
                 billed_amount = max(clean_amounts) if clean_amounts else 0.0
                 
-                # Deduce Invoice ID safely
                 if inv_match and len(inv_match.group(1).strip()) > 1:
                     invoice_id = inv_match.group(1).strip()
                 else:
@@ -300,11 +316,9 @@ with tabs[0]:
 
         df_inv = pd.DataFrame(invoice_records)
 
-        # Rate Card Processing
         df_rates = pd.read_csv(contract_file) if contract_file.name.endswith(".csv") else pd.read_excel(contract_file)
         df_rates.columns = [str(c).strip() for c in df_rates.columns]
 
-        # Locate Rate Column in CSV
         rate_col = None
         for col in df_rates.columns:
             if any(kw in col.lower() for kw in ["contract", "base", "rate", "price", "amount", "kes"]):
@@ -315,19 +329,16 @@ with tabs[0]:
             num_cols = df_rates.select_dtypes(include=[np.number]).columns
             rate_col = num_cols[0] if len(num_cols) > 0 else df_rates.columns[-1]
 
-        # Numeric Extraction for Rate Card
         df_rates[rate_col] = pd.to_numeric(
             df_rates[rate_col].astype(str).str.replace(',', '').str.extract(r'([\d\.]+)')[0], 
             errors='coerce'
         ).fillna(0.0)
 
-        # Numeric Extraction for PDF Invoices
         df_inv["Billed_Base"] = pd.to_numeric(
             df_inv["Billed_Base"].astype(str).str.replace(',', '').str.extract(r'([\d\.]+)')[0], 
             errors='coerce'
         ).fillna(0.0)
 
-        # 1-to-1 Mapping Guard
         contract_rates = df_rates[rate_col].values
         total_inv_count = len(df_inv)
         
@@ -339,7 +350,6 @@ with tabs[0]:
 
         df_merged = df_inv.copy()
 
-        # Variance Logic
         diff = df_merged["Billed_Base"] - df_merged["Contract_Base"]
         df_merged["Total_Overcharge"] = np.where(diff > variance_threshold, diff, 0.0)
         df_merged["eTIMS_Valid"] = True
@@ -371,7 +381,6 @@ with tabs[0]:
 
         flagged = df_active[df_active["Audit_Status"] != "PASSED_VERIFIED"].copy()
         
-        # Clean invalid or dummy values from dropdown options
         valid_flagged_options = [
             str(inv).strip() for inv in flagged["Invoice_No"].unique() 
             if str(inv).strip() not in ["", "-", "None", "nan", "N/A"]
@@ -381,10 +390,33 @@ with tabs[0]:
             st.subheader("✉️ Action Center")
             selected_inv = st.selectbox("Select Invoice:", valid_flagged_options)
             
-            # Select matching row safe lookup
             matched_rows = flagged[flagged["Invoice_No"].astype(str) == selected_inv]
             row = matched_rows.iloc[0] if not matched_rows.empty else flagged.iloc[0]
-            
+
+            # Generate Dispute Email Content
+            email_subject = f"DISPUTE NOTICE: Invoice Discrepancy #{selected_inv} - {row['Carrier']}"
+            email_body = f"""Dear Accounts Receivable Team ({row['Carrier']}),
+
+We are formally disputing the charges associated with Invoice #{selected_inv} (BoL Ref: {row['BoL_Ref']}).
+
+Discrepancy Details:
+------------------------------------------
+- Billed Base Amount: KES {row['Billed_Base']:,.2f}
+- Agreed Contract Rate: KES {row['Contract_Base']:,.2f}
+- Total Overcharge Claim: KES {row['Total_Overcharge']:,.2f}
+
+Please issue a revised invoice or a credit note for KES {row['Total_Overcharge']:,.2f} at your earliest convenience.
+
+Best regards,
+Freight Audit Team
+{st.session_state['username'].title()} ({st.session_state['role'].upper()})
+"""
+
+            # Email Content Preview Box
+            with st.expander("✉️ Preview Dispute Email Details", expanded=True):
+                st.text_input("Subject:", value=email_subject, disabled=True)
+                st.text_area("Message Body:", value=email_body, height=200)
+
             c_btn1, c_btn2 = st.columns(2)
             with c_btn1:
                 st.download_button("📄 Download Debit Note (PDF)", generate_pdf_debit_note(row), f"Debit_Note_{selected_inv}.pdf", "application/pdf")
@@ -392,7 +424,7 @@ with tabs[0]:
             if st.session_state["role"] in ["admin", "finance"]:
                 if st.button("🚀 Dispatch Dispute Email"):
                     update_dispute_status(selected_inv, 'DISPUTE_SENT')
-                    st.success(f"Dispute logged for Invoice {selected_inv}!")
+                    st.success(f"Dispute logged and email dispatched for Invoice {selected_inv}!")
         else:
             st.info("No flagged invoices requiring dispute dispatching.")
     else:
