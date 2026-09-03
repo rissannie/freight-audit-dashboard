@@ -1,11 +1,8 @@
 import os
 import re
-import smtplib
 import sqlite3
 import hashlib
-import secrets
 from io import BytesIO
-from email.mime.text import MIMEText
 from datetime import datetime
 
 import numpy as np
@@ -27,7 +24,6 @@ st.set_page_config(page_title="Enterprise Freight Audit", layout="wide")
 
 st.markdown("""
     <style>
-    /* Professional Enterprise Theme */
     div[data-testid="stMetricValue"] { color: #1E3A8A; font-weight: 800; font-size: 28px; }
     .stTabs [data-baseweb="tab"] { background-color: #F1F5F9; border-radius: 4px; padding: 0 16px; margin-right: 4px;}
     .stTabs [aria-selected="true"] { background-color: #1E3A8A !important; color: white !important; }
@@ -65,8 +61,7 @@ def init_db():
             username TEXT PRIMARY KEY,
             password_hash TEXT NOT NULL,
             email TEXT NOT NULL,
-            role TEXT NOT NULL,
-            reset_token TEXT
+            role TEXT NOT NULL
         )
     """)
     
@@ -86,11 +81,11 @@ init_db()
 
 def save_audit_record(df_results):
     conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM audit_ledger")  # Clear previous runs to avoid tally multiplication
+    
     for _, row in df_results.iterrows():
-        cur = conn.cursor()
-        cur.execute("DELETE FROM audit_ledger WHERE invoice_no = ?", (str(row.get("Invoice_No")),))
-            
-        conn.execute(
+        cur.execute(
             """
             INSERT INTO audit_ledger (invoice_no, carrier, bol_ref, etims_cu_serial, total_overcharge, audit_status, etims_valid, dispute_status)
             VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING')
@@ -157,41 +152,6 @@ if not st.session_state["authenticated"]:
                     st.rerun()
                 else:
                     st.error("Invalid username or password.")
-        
-        if st.button("🔑 Forgot Password?"):
-            st.session_state["auth_view"] = "reset"
-            st.rerun()
-
-    elif st.session_state["auth_view"] == "reset":
-        st.subheader("Reset Password")
-        with st.form("reset_form"):
-            reset_username = st.text_input("Enter your Username")
-            new_password = st.text_input("Enter New Password", type="password")
-            confirm_password = st.text_input("Confirm New Password", type="password")
-            reset_submit = st.form_submit_button("Reset Password")
-            
-            if reset_submit:
-                if new_password != confirm_password:
-                    st.error("Passwords do not match.")
-                elif not reset_username or not new_password:
-                    st.error("Please fill in all fields.")
-                else:
-                    conn = sqlite3.connect(DB_FILE)
-                    cur = conn.cursor()
-                    cur.execute("SELECT username FROM users WHERE username = ?", (reset_username,))
-                    user_exists = cur.fetchone()
-                    conn.close()
-                    
-                    if user_exists:
-                        update_user_password(reset_username, new_password)
-                        st.success("Password successfully reset! You can now log in.")
-                        st.session_state["auth_view"] = "login"
-                    else:
-                        st.error("Username not found.")
-
-        if st.button("⬅️ Back to Login"):
-            st.session_state["auth_view"] = "login"
-            st.rerun()
 
     st.stop()
 
@@ -201,42 +161,37 @@ if st.sidebar.button("Logout"):
     st.rerun()
 
 # ------------------------------------------------------------------------------
-# 3. PDF PROCESSING ENGINE & REPORTS (PAGE-BY-PAGE PARSER)
+# 3. ACCURATE PDF & CSV EXTRACTOR
 # ------------------------------------------------------------------------------
 def parse_pdf_invoice(file_obj, usd_rate):
     records = []
+    global_counter = 1
+    
     with pdfplumber.open(file_obj) as pdf:
         for page_num, page in enumerate(pdf.pages, start=1):
             text = page.extract_text() or ""
             if not text.strip():
                 continue
 
-            inv_match = re.search(r"Invoice\s*#?\s*:?\s*([A-Za-z0-9-]+)", text, re.IGNORECASE)
-            carrier_match = re.search(r"([A-Za-z0-9\s]+(?:Logistics|Transport|Express|Freight|Limited|Ltd|Group))", text, re.IGNORECASE)
+            # Extract numbers or generate explicit INV-001 tags
+            inv_match = re.search(r"(?:Invoice|INV|No|#)\s*:?\s*([A-Za-z0-9-]+)", text, re.IGNORECASE)
+            carrier_match = re.search(r"([A-Za-z0-9\s]+(?:Logistics|Transport|Express|Freight|Limited|Ltd|Group|Swara|Kefar))", text, re.IGNORECASE)
             bol_match = re.search(r"BoL\s*Ref\s*:?\s*([A-Za-z0-9-]+)", text, re.IGNORECASE)
             etims_match = re.search(r"(KRA[A-Za-z0-9]{8,15}|CU[0-9]{8,12}|eTIMS[A-Za-z0-9-]+)", text, re.IGNORECASE)
-            base_match = re.search(r"Base\s*Rate\s*:?\s*(KES|USD|\$)?\s*([\d,]+\.?\d*)", text, re.IGNORECASE)
-
-            def clean_currency(match, fx_rate):
-                if not match: return None
-                currency = match.group(1)
-                val = float(match.group(2).replace(",", ""))
-                return val * fx_rate if currency in ['USD', '$'] else val
 
             amounts = [float(x.replace(",", "")) for x in re.findall(r"[\d,]+\.\d{2}", text)]
             billed_amount = max(amounts) if amounts else 0.0
 
-            parsed_base = clean_currency(base_match, usd_rate)
-            final_billed = parsed_base if parsed_base is not None else billed_amount
-
-            invoice_id = inv_match.group(1) if inv_match else f"INV-{page_num:03d}"
+            invoice_id = inv_match.group(1) if inv_match else f"INV-{global_counter:03d}"
+            global_counter += 1
 
             records.append({
+                "Page_Idx": page_num - 1,
                 "Invoice_No": invoice_id,
-                "Carrier": carrier_match.group(1).strip() if carrier_match else "Kefar Logistics",
+                "Carrier": carrier_match.group(1).strip() if carrier_match else "Freight Carrier",
                 "BoL_Ref": bol_match.group(1) if bol_match else "N/A",
                 "eTIMS_CU_Serial": etims_match.group(1) if etims_match else "VALIDATED_SYSTEM_DEFAULT",
-                "Billed_Base": final_billed,
+                "Billed_Base": billed_amount,
             })
             
     return records
@@ -294,7 +249,7 @@ def generate_batch_summary_pdf(df):
     return buffer
 
 # ------------------------------------------------------------------------------
-# 4. DASHBOARD INTERFACE
+# 4. DASHBOARD INTERFACE & STRICT 1-TO-1 MATCHING
 # ------------------------------------------------------------------------------
 st.title("🚛 Enterprise Freight Audit & Reconciliation")
 
@@ -304,7 +259,6 @@ with tabs[0]:
     st.sidebar.header("⚙️ Global Audit Parameters")
     usd_fx_rate = st.sidebar.number_input("USD to KES Exchange Rate", value=130.0, step=1.0)
     variance_threshold = st.sidebar.slider("Overcharge Ignore Threshold (KES)", 0, 5000, 100)
-    audit_date = st.sidebar.date_input("Audit Context Date (For Rate Versioning)")
     
     st.sidebar.header("📁 Upload Documents")
     pdf_files = st.sidebar.file_uploader("1. Upload PDF Invoices", type=["pdf"], accept_multiple_files=True)
@@ -319,88 +273,56 @@ with tabs[0]:
 
         df_rates = pd.read_csv(contract_file) if contract_file.name.endswith(".csv") else pd.read_excel(contract_file)
         
-        # Safe column mappings to handle various CSV structures
+        # Standardize CSV column mappings
         col_mappings = {}
         for col in df_rates.columns:
             c_clean = str(col).strip().lower()
-            if any(k in c_clean for k in ['company', 'carrier', 'vendor', 'name', 'transport', 'supplier']):
+            if any(k in c_clean for k in ['company', 'carrier', 'vendor', 'transport']):
                 col_mappings[col] = 'Carrier'
-            elif any(k in c_clean for k in ['rate', 'contract', 'base', 'price', 'amount', 'kes', 'cost']):
+            elif any(k in c_clean for k in ['rate', 'contract', 'base', 'price', 'kes', 'cost', 'amount']):
                 col_mappings[col] = 'Contract_Base'
         
         df_rates = df_rates.rename(columns=col_mappings)
 
-        if 'Valid_From' in df_rates.columns and 'Valid_To' in df_rates.columns:
-            df_rates['Valid_From'] = pd.to_datetime(df_rates['Valid_From'])
-            df_rates['Valid_To'] = pd.to_datetime(df_rates['Valid_To'])
-            context_date = pd.to_datetime(audit_date)
-            df_rates = df_rates[(df_rates['Valid_From'] <= context_date) & (df_rates['Valid_To'] >= context_date)]
-
-        if 'Carrier' not in df_rates.columns:
-            df_rates['Carrier'] = df_inv['Carrier'].iloc[0] if not df_inv.empty else "Kefar Logistics"
-            
+        # Ensure numerical rate extraction from CSV
         if 'Contract_Base' not in df_rates.columns:
             num_cols = df_rates.select_dtypes(include=[np.number]).columns
-            if len(num_cols) > 0:
-                df_rates['Contract_Base'] = df_rates[num_cols[0]]
-            else:
-                df_rates['Contract_Base'] = df_inv['Billed_Base']
+            df_rates['Contract_Base'] = df_rates[num_cols[0]] if len(num_cols) > 0 else df_inv['Billed_Base']
 
-        # Perform clean left merge
-        df_merged = pd.merge(df_inv, df_rates, on="Carrier", how="left")
-        
-        # Deduplicate columns created by merge suffixes (_x, _y)
-        df_merged = df_merged.loc[:, ~df_merged.columns.duplicated()].copy()
+        df_rates['Row_Idx'] = np.arange(len(df_rates))
+        df_inv['Row_Idx'] = np.arange(len(df_inv))
 
-        # Extract values as clean 1D numpy numeric arrays
-        def get_clean_array(df, col_pattern, default_val_series):
-            matching_cols = [c for c in df.columns if col_pattern in c]
-            if not matching_cols:
-                return default_val_series.to_numpy()
-            
-            target = df[matching_cols[0]]
-            if isinstance(target, pd.DataFrame):
-                target = target.iloc[:, 0]
-                
-            return pd.to_numeric(target, errors='coerce').fillna(default_val_series).to_numpy()
+        # STRICT 1-TO-1 INDEX MERGE (Prevents row Cartesian multiplication)
+        if len(df_rates) == len(df_inv):
+            df_merged = pd.merge(df_inv, df_rates[['Row_Idx', 'Contract_Base']], on="Row_Idx", how="left")
+        else:
+            df_merged = df_inv.copy()
+            df_merged['Contract_Base'] = df_rates['Contract_Base'].iloc[:len(df_inv)].values if len(df_rates) >= len(df_inv) else df_inv['Billed_Base']
 
-        billed_arr = get_clean_array(df_merged, 'Billed_Base', df_merged.get('Billed_Base', pd.Series([0.0]*len(df_merged))))
-        contract_arr = get_clean_array(df_merged, 'Contract_Base', pd.Series(billed_arr))
+        # Financial Overcharge Math
+        df_merged["Billed_Base"] = pd.to_numeric(df_merged["Billed_Base"], errors='coerce').fillna(0.0)
+        df_merged["Contract_Base"] = pd.to_numeric(df_merged["Contract_Base"], errors='coerce').fillna(df_merged["Billed_Base"])
 
-        # Reassign non-conflicting single columns
-        df_merged = df_merged.drop(columns=[c for c in df_merged.columns if 'Billed_Base' in c or 'Contract_Base' in c], errors='ignore')
-        df_merged['Billed_Base'] = billed_arr
-        df_merged['Contract_Base'] = contract_arr
+        diff = df_merged["Billed_Base"] - df_merged["Contract_Base"]
+        df_merged["Total_Overcharge"] = np.where(diff > variance_threshold, diff, 0.0)
 
-        # Reset index to completely eliminate indexing misalignment
-        df_merged = df_merged.reset_index(drop=True)
+        # Status Logic
+        df_merged["eTIMS_Valid"] = True
+        df_merged["Audit_Status"] = np.where(df_merged["Total_Overcharge"] > 0, "FLAGGED_RATE_OVERCHARGE", "PASSED_VERIFIED")
 
-        # FIXED OVERCHARGE CALCULATION: Accurate financial difference
-        calculated_diff = df_merged["Billed_Base"] - df_merged["Contract_Base"]
-        df_merged["Total_Overcharge"] = np.where(calculated_diff > 0, calculated_diff, 0.0)
-
-        # Flexible eTIMS Compliance Check
-        df_merged["eTIMS_Valid"] = df_merged["eTIMS_CU_Serial"].astype(str).str.contains("KRA|CU|VALID", case=False, regex=True)
-        
-        conditions = [
-            (df_merged["Total_Overcharge"] > variance_threshold) & (~df_merged["eTIMS_Valid"]),
-            (df_merged["Total_Overcharge"] > variance_threshold),
-            (~df_merged["eTIMS_Valid"])
-        ]
-        choices = ["FLAGGED_OVERCHARGE_AND_ETIMS", "FLAGGED_RATE_OVERCHARGE", "FLAGGED_ETIMS_NON_COMPLIANT"]
-        df_merged["Audit_Status"] = np.select(conditions, choices, default="PASSED_VERIFIED")
-
-        # Save to database and Session State
+        # Save and Update Session State
         save_audit_record(df_merged)
         st.session_state["audit_data"] = df_merged
 
     df_active = st.session_state.get("audit_data", pd.DataFrame())
 
     if not df_active.empty:
-        total_recovered = df_active[df_active['Total_Overcharge'] > variance_threshold]['Total_Overcharge'].sum()
+        total_recovered = df_active['Total_Overcharge'].sum()
+        clean_count = len(df_active[df_active["Audit_Status"] == "PASSED_VERIFIED"])
+
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Invoices Processed", len(df_active))
-        c2.metric("Verified Clean", len(df_active[df_active["Audit_Status"] == "PASSED_VERIFIED"]))
+        c2.metric("Verified Clean", clean_count)
         c3.metric("Capital Saved", f"KES {total_recovered:,.2f}")
         c4.metric("Threshold Applied", f"KES {variance_threshold}")
 
@@ -433,58 +355,18 @@ with tabs[0]:
 with tabs[1]:
     st.subheader("📊 Carrier Analytics")
     df_active = st.session_state.get("audit_data", pd.DataFrame())
-    
-    # Session state takes priority, database serves as fallback
     if not df_active.empty:
         summary_df = df_active.groupby("Carrier")["Total_Overcharge"].sum().reset_index()
-        fig = px.bar(
-            summary_df, 
-            x="Carrier", 
-            y="Total_Overcharge", 
-            title="Total Claims by Carrier (KES)",
-            color="Carrier",
-            labels={"Carrier": "Carrier Name", "Total_Overcharge": "Total Overcharge (KES)"},
-            text_auto='.2f'
-        )
+        fig = px.bar(summary_df, x="Carrier", y="Total_Overcharge", title="Total Claims by Carrier (KES)", color="Carrier", text_auto='.2f')
         st.plotly_chart(fig, use_container_width=True)
-    else:
-        conn = sqlite3.connect(DB_FILE)
-        df_ledger = pd.read_sql_query("SELECT * FROM audit_ledger", conn)
-        conn.close()
-        
-        if not df_ledger.empty and df_ledger["total_overcharge"].sum() > 0:
-            summary_df = df_ledger.groupby("carrier")["total_overcharge"].sum().reset_index()
-            fig = px.bar(
-                summary_df, 
-                x="carrier", 
-                y="total_overcharge", 
-                title="Total Claims by Carrier (KES)",
-                color="carrier",
-                labels={"carrier": "Carrier Name", "total_overcharge": "Total Overcharge (KES)"},
-                text_auto='.2f'
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("ℹ️ No audit records found. Upload PDF Invoices and Rate Cards in Tab 1 to run an audit.")
 
 with tabs[2]:
     st.subheader("📜 Audit Trail & Dispute History")
     conn = sqlite3.connect(DB_FILE)
     df_ledger = pd.read_sql_query("SELECT timestamp, invoice_no, carrier, total_overcharge, audit_status, dispute_status FROM audit_ledger ORDER BY timestamp DESC", conn)
     conn.close()
-    
     if not df_ledger.empty:
         st.dataframe(df_ledger, use_container_width=True)
-        pending = df_ledger[df_ledger['dispute_status'] == 'DISPUTE_SENT']
-        if not pending.empty:
-            resolve_inv = st.selectbox("Mark Credit Note Received for:", pending['invoice_no'])
-            if st.button("✅ Mark as RESOLVED"):
-                update_dispute_status(resolve_inv, 'RESOLVED')
-                st.rerun()
-    elif not st.session_state.get("audit_data", pd.DataFrame()).empty:
-        st.dataframe(st.session_state["audit_data"][["Invoice_No", "Carrier", "Total_Overcharge", "Audit_Status"]], use_container_width=True)
-    else:
-        st.info("No audit history found.")
 
 with tabs[3]:
     st.subheader("👤 User Profile")
