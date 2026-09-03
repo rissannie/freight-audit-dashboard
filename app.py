@@ -336,19 +336,20 @@ with tabs[0]:
 
         df_merged = pd.merge(df_inv, df_rates, on="Carrier", how="left")
 
-        # Safely extract Billed_Base and Contract_Base
-        if 'Billed_Base' in df_merged.columns:
-            billed_vals = pd.to_numeric(df_merged['Billed_Base'], errors='coerce').fillna(150000.00)
-        else:
-            billed_vals = pd.Series([150000.00] * len(df_merged))
+        # --- CRITICAL FIX: Safe extraction helper ensuring 1D Series conversion ---
+        def extract_series(df, base_col_name, default_val):
+            matching_cols = [c for c in df.columns if base_col_name in c]
+            if not matching_cols:
+                return pd.Series([default_val] * len(df))
+            
+            selected = df[matching_cols[0]]
+            if isinstance(selected, pd.DataFrame):
+                selected = selected.iloc[:, 0]
+                
+            return pd.to_numeric(selected, errors='coerce').fillna(default_val)
 
-        if 'Contract_Base' in df_merged.columns:
-            contract_vals = pd.to_numeric(df_merged['Contract_Base'], errors='coerce').fillna(120000.00)
-        else:
-            contract_vals = pd.Series([120000.00] * len(df_merged))
-
-        df_merged['Billed_Base'] = billed_vals
-        df_merged['Contract_Base'] = contract_vals
+        df_merged['Billed_Base'] = extract_series(df_merged, 'Billed_Base', 150000.00)
+        df_merged['Contract_Base'] = extract_series(df_merged, 'Contract_Base', 120000.00)
 
         calculated_diff = df_merged["Billed_Base"] - df_merged["Contract_Base"]
         df_merged["Total_Overcharge"] = np.where(calculated_diff <= 0, 15000.00, calculated_diff)
