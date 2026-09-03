@@ -334,22 +334,34 @@ with tabs[0]:
             num_cols = df_rates.select_dtypes(include=[np.number]).columns
             df_rates['Contract_Base'] = df_rates[num_cols[0]] if len(num_cols) > 0 else 120000.00
 
+        # Perform clean left merge
         df_merged = pd.merge(df_inv, df_rates, on="Carrier", how="left")
+        
+        # Deduplicate columns created by merge suffixes (_x, _y)
+        df_merged = df_merged.loc[:, ~df_merged.columns.duplicated()].copy()
 
-        # --- CRITICAL FIX: Safe extraction helper ensuring 1D Series conversion ---
-        def extract_series(df, base_col_name, default_val):
-            matching_cols = [c for c in df.columns if base_col_name in c]
+        # Extract values as clean 1D numpy numeric arrays to prevent index mismatch / duplicate label errors
+        def get_clean_array(df, col_pattern, default_val):
+            matching_cols = [c for c in df.columns if col_pattern in c]
             if not matching_cols:
-                return pd.Series([default_val] * len(df))
+                return np.full(len(df), default_val, dtype=float)
             
-            selected = df[matching_cols[0]]
-            if isinstance(selected, pd.DataFrame):
-                selected = selected.iloc[:, 0]
+            target = df[matching_cols[0]]
+            if isinstance(target, pd.DataFrame):
+                target = target.iloc[:, 0]
                 
-            return pd.to_numeric(selected, errors='coerce').fillna(default_val)
+            return pd.to_numeric(target, errors='coerce').fillna(default_val).to_numpy()
 
-        df_merged['Billed_Base'] = extract_series(df_merged, 'Billed_Base', 150000.00)
-        df_merged['Contract_Base'] = extract_series(df_merged, 'Contract_Base', 120000.00)
+        billed_arr = get_clean_array(df_merged, 'Billed_Base', 150000.00)
+        contract_arr = get_clean_array(df_merged, 'Contract_Base', 120000.00)
+
+        # Reassign non-conflicting single columns
+        df_merged = df_merged.drop(columns=[c for c in df_merged.columns if 'Billed_Base' in c or 'Contract_Base' in c], errors='ignore')
+        df_merged['Billed_Base'] = billed_arr
+        df_merged['Contract_Base'] = contract_arr
+
+        # Reset index to completely eliminate indexing misalignment
+        df_merged = df_merged.reset_index(drop=True)
 
         calculated_diff = df_merged["Billed_Base"] - df_merged["Contract_Base"]
         df_merged["Total_Overcharge"] = np.where(calculated_diff <= 0, 15000.00, calculated_diff)
