@@ -185,7 +185,7 @@ if st.sidebar.button("Logout"):
     st.rerun()
 
 # ------------------------------------------------------------------------------
-# 3. UNIVERSAL PDF & CSV PARSING ENGINE (FEATURE 1 & 2 ENHANCED)
+# 3. UNIVERSAL PDF & CSV PARSING ENGINE
 # ------------------------------------------------------------------------------
 def parse_pdf_invoice_universal(file_obj, usd_rate):
     records = []
@@ -209,13 +209,11 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
                     text, re.IGNORECASE
                 )
                 
-                # FEATURE 1: Enhanced KRA eTIMS CU Serial & QR pattern extraction
                 etims_match = re.search(
                     r"(KRA[A-Za-z0-9]{8,15}|CU[0-9]{8,12}|eTIMS[A-Za-z0-9-]+|KRA\d{11,14})", 
                     text, re.IGNORECASE
                 )
 
-                # FEATURE 2: FX Rate Detection within Invoice Text
                 fx_match = re.search(r"(?:FX|Rate|Exchange\s*Rate|USD/KES)\s*[:=]?\s*(\d{2,3}\.\d{2})", text, re.IGNORECASE)
                 billed_fx = float(fx_match.group(1)) if fx_match else usd_rate
 
@@ -228,7 +226,6 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
                 else:
                     invoice_id = f"{clean_fname}_P{page_num}" if len(pdf.pages) > 1 else clean_fname
 
-                # Validate eTIMS presence
                 etims_serial = etims_match.group(1) if etims_match else "MISSING_ETIMS_CU"
                 is_etims_valid = etims_serial != "MISSING_ETIMS_CU"
 
@@ -316,7 +313,7 @@ def generate_batch_summary_pdf(df):
 # ------------------------------------------------------------------------------
 st.title("🚛 Enterprise Freight Audit & Reconciliation")
 
-tabs = st.tabs(["📋 Active Audit Engine", "⚓ Port Demurrage Tool", "📊 Carrier Scorecards", "📜 Dispute Ledger", "👤 User Profile"])
+tabs = st.tabs(["📋 Active Audit Engine", "🌍 Cross-Border Audit", "⚓ Port Demurrage Tool", "📊 Carrier Scorecards", "📜 Dispute Ledger", "👤 User Profile"])
 
 with tabs[0]:
     st.sidebar.header("⚙️ Global Audit Parameters")
@@ -368,17 +365,14 @@ with tabs[0]:
 
         df_merged = df_inv.copy()
 
-        # FEATURE 1: FX Rate Overcharge Audit Logic
         fx_diff = np.maximum(0.0, df_merged["Billed_FX_Rate"] - usd_fx_rate)
         df_merged["FX_Overcharge"] = (df_merged["Billed_Base"] / usd_fx_rate) * fx_diff
 
-        # Rate Variance Logic
         rate_diff = df_merged["Billed_Base"] - df_merged["Contract_Base"]
         base_overcharge = np.where(rate_diff > variance_threshold, rate_diff, 0.0)
 
         df_merged["Total_Overcharge"] = base_overcharge + df_merged["FX_Overcharge"]
         
-        # FEATURE 2: eTIMS Status flagging
         conditions = [
             (~df_merged["eTIMS_Valid"]),
             (df_merged["Total_Overcharge"] > 0)
@@ -428,7 +422,6 @@ with tabs[0]:
             matched_rows = flagged[flagged["Invoice_No"].astype(str) == selected_inv]
             row = matched_rows.iloc[0] if not matched_rows.empty else flagged.iloc[0]
 
-            # Generate Dispute Email Content
             email_subject = f"DISPUTE NOTICE: Invoice Discrepancy #{selected_inv} - {row['Carrier']}"
             email_body = f"""Dear Accounts Receivable Team ({row['Carrier']}),
 
@@ -449,11 +442,9 @@ Freight Audit Team
 {st.session_state['username'].title()} ({st.session_state['role'].upper()})
 """
 
-            # FEATURE 4: Pre-formatted WhatsApp Message & Link Generator
             whatsapp_text = f"Hello {row['Carrier']} Team. Re: Invoice #{selected_inv} (BoL: {row['BoL_Ref']}). Our audit flagged a variance of KES {row['Total_Overcharge']:,.2f}. Please review the formal debit note sent to your email."
             whatsapp_url = f"https://wa.me/?text={urllib.parse.quote(whatsapp_text)}"
 
-            # Email Content Preview Box
             with st.expander("✉️ Preview Dispute Message & Dispatch Options", expanded=True):
                 st.text_input("Subject:", value=email_subject, disabled=True)
                 st.text_area("Message Body:", value=email_body, height=180)
@@ -472,8 +463,64 @@ Freight Audit Team
     else:
         st.info("👈 Upload PDF Invoices and Rate Cards in the sidebar to view audit extraction results.")
 
-# FEATURE 3: MOMBASA PORT & ICD DEMURRAGE CALCULATOR TAB
+# CROSS-BORDER TAB
 with tabs[1]:
+    st.subheader("🌍 East & Southern Africa Cross-Border Freight Audit")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        corridor = st.selectbox("Select Transport Corridor", [
+            "Northern Corridor (Mombasa - Kampala - Kigali)",
+            "Central Corridor (Dar es Salaam - Mutukula - Kigali/Bujumbura)",
+            "North-South Corridor (Tanzania/Kenya - Tunduma/Nakonde - Zambia)"
+        ])
+        origin_country = st.selectbox("Origin Country", ["Kenya (KRA)", "Tanzania (TRA)", "Uganda (URA)", "Zambia (ZRA)"])
+        
+    with col2:
+        billed_currency = st.selectbox("Invoice Currency", ["USD", "KES", "UGX", "TZS", "ZMW"])
+        billed_amount = st.number_input("Billed Total Amount", value=5000.0)
+        carrier_fx = st.number_input("Carrier FX Conversion Rate Applied", value=138.50)
+        
+    with col3:
+        cb_rates = {"USD": 1.0, "KES": 129.50, "UGX": 3680.00, "TZS": 2650.00, "ZMW": 26.50}
+        benchmark_fx = cb_rates.get(billed_currency, 1.0)
+        st.metric("Official Benchmark Rate", f"{benchmark_fx} {billed_currency}/USD")
+        
+        border_delay_days = st.number_input("Border Processing Delay (Days)", min_value=0, value=3)
+
+    tax_system_map = {
+        "Kenya (KRA)": "eTIMS CU Serial Number",
+        "Uganda (URA)": "EFRIS Invoice Number / QR",
+        "Tanzania (TRA)": "EFD / VFD Receipt Verification",
+        "Zambia (ZRA)": "Smart Invoice Mark / Clearance Code"
+    }
+    
+    st.markdown("---")
+    st.markdown(f"**Required Tax Compliance Check:** `{tax_system_map[origin_country]}`")
+
+    if billed_currency != "USD":
+        expected_base_in_usd = billed_amount / benchmark_fx
+        billed_in_usd = billed_amount / carrier_fx
+        fx_discrepancy_usd = max(0.0, billed_in_usd - expected_base_in_usd)
+    else:
+        fx_discrepancy_usd = 0.0
+
+    chargeable_border_days = max(0, border_delay_days - 1)
+    border_demurrage_claim_usd = chargeable_border_days * 150.0
+
+    total_cross_border_claim_usd = fx_discrepancy_usd + border_demurrage_claim_usd
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("FX Arbitrage Claim", f"USD {fx_discrepancy_usd:,.2f}")
+    m2.metric("Border Demurrage Variance", f"USD {border_demurrage_claim_usd:,.2f}")
+    m3.metric("Total Cross-Border Claim", f"USD {total_cross_border_claim_usd:,.2f}")
+
+    if total_cross_border_claim_usd > 0:
+        st.warning(f"⚠️ Cross-border billing variance detected: Total Claim USD {total_cross_border_claim_usd:,.2f}")
+
+# MOMBASA PORT & ICD DEMURRAGE CALCULATOR TAB
+with tabs[2]:
     st.subheader("⚓ Mombasa Port & ICD Demurrage Auditor")
     st.write("Calculate free-period allowances and audit container detention charges.")
 
@@ -488,7 +535,6 @@ with tabs[1]:
         daily_demurrage_usd = st.number_input("Daily Demurrage Rate per Container (USD)", value=40.0)
         billed_demurrage_kes = st.number_input("Demurrage Amount Billed by Carrier (KES)", value=65000.0)
 
-    # Calculation Logic
     free_days = 7 if "Local" in shipment_type else 14
     total_days = (return_date - gate_out_date).days
     chargeable_days = max(0, total_days - free_days)
@@ -506,7 +552,7 @@ with tabs[1]:
     if demurrage_overcharge > 0:
         st.error(f"⚠️ Flagged Demurrage Overcharge: Carrier overbilled by KES {demurrage_overcharge:,.2f}.")
 
-with tabs[2]:
+with tabs[3]:
     st.subheader("📊 Carrier Analytics")
     df_active = st.session_state.get("audit_data", pd.DataFrame())
     if not df_active.empty and "Carrier" in df_active.columns:
@@ -514,7 +560,7 @@ with tabs[2]:
         fig = px.bar(summary_df, x="Carrier", y="Total_Overcharge", title="Total Claims by Carrier (KES)", color="Carrier", text_auto='.2f')
         st.plotly_chart(fig, use_container_width=True)
 
-with tabs[3]:
+with tabs[4]:
     st.subheader("📜 Audit Trail & Dispute History")
     conn = sqlite3.connect(DB_FILE)
     df_ledger = pd.read_sql_query("SELECT timestamp, invoice_no, carrier, total_overcharge, audit_status, dispute_status FROM audit_ledger ORDER BY timestamp DESC", conn)
@@ -522,6 +568,6 @@ with tabs[3]:
     if not df_ledger.empty:
         st.dataframe(df_ledger, use_container_width=True)
 
-with tabs[4]:
+with tabs[5]:
     st.subheader("👤 User Profile")
     st.write(f"Logged in user: **{st.session_state['username']}** | Role: **{st.session_state['role']}**")
