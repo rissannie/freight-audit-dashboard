@@ -529,7 +529,7 @@ with tabs[1]:
         # ==========================================
 # ⛽ FLEET & FUEL TELEMATICS MONITOR (TRUFOODS MODULE)
 # ==========================================
-with tab_telematics:
+with tabs[1]:
     st.header("⛽ Real-Time Fleet & Fuel Telematics Monitor")
     st.info("Upload daily GPS / Fuel Card CSV logs to detect fuel siphoning, route deviations, and excessive idling.")
     
