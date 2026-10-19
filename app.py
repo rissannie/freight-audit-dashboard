@@ -313,7 +313,15 @@ def generate_batch_summary_pdf(df):
 # ------------------------------------------------------------------------------
 st.title("🚛 Enterprise Freight Audit & Reconciliation")
 
-tabs = st.tabs(["📋 Active Audit Engine", "🌍 Cross-Border Audit", "⚓ Port Demurrage Tool", "📊 Carrier Scorecards", "📜 Dispute Ledger", "👤 User Profile"])
+tabs = st.tabs([
+    "📋 Active Audit Engine", 
+    "⛽ Fleet & Fuel Telematics",
+    "🌍 Cross-Border Audit", 
+    "⚓ Port Demurrage Tool", 
+    "📊 Carrier Scorecards", 
+    "📜 Dispute Ledger", 
+    "👤 User Profile"
+])
 
 with tabs[0]:
     st.sidebar.header("⚙️ Global Audit Parameters")
@@ -518,6 +526,68 @@ with tabs[1]:
 
     if total_cross_border_claim_usd > 0:
         st.warning(f"⚠️ Cross-border billing variance detected: Total Claim USD {total_cross_border_claim_usd:,.2f}")
+        # ==========================================
+# ⛽ FLEET & FUEL TELEMATICS MONITOR (TRUFOODS MODULE)
+# ==========================================
+with tab_telematics:
+    st.header("⛽ Real-Time Fleet & Fuel Telematics Monitor")
+    st.info("Upload daily GPS / Fuel Card CSV logs to detect fuel siphoning, route deviations, and excessive idling.")
+    
+    # Sample file download option for testing
+    st.caption("Don't have a log? Upload any CSV file with columns: Truck_ID, Driver, Planned_KM, Actual_KM, Idle_Hours, Fuel_Drop_Liters")
+
+    telematics_file = st.file_uploader("Upload Telematics/GPS Log (.csv, .xlsx)", type=["csv", "xlsx"], key="telematics_upload")
+    
+    if telematics_file:
+        try:
+            if telematics_file.name.endswith('.csv'):
+                df_tele = pd.read_csv(telematics_file)
+            else:
+                df_tele = pd.read_excel(telematics_file)
+            
+            st.success("Telematics log loaded successfully!")
+            
+            # Smart Column Detection & Defaults
+            fuel_col = [c for c in df_tele.columns if 'fuel' in c.lower() or 'drop' in c.lower() or 'liters' in c.lower()]
+            idle_col = [c for c in df_tele.columns if 'idle' in c.lower()]
+            actual_km_col = [c for c in df_tele.columns if 'actual' in c.lower() or 'km' in c.lower()]
+            planned_km_col = [c for c in df_tele.columns if 'planned' in c.lower() or 'route' in c.lower()]
+
+            # Default metrics
+            siphoning_count = len(df_tele[df_tele[fuel_col[0]] > 10]) if fuel_col else 0
+            excessive_idle = len(df_tele[df_tele[idle_col[0]] > 2.0]) if idle_col else 0
+            
+            if actual_km_col and planned_km_col:
+                route_deviations = len(df_tele[df_tele[actual_km_col[0]] > (df_tele[planned_km_col[0]] * 1.10)])
+            else:
+                route_deviations = 0
+
+            # Display Key Metrics Dashboard
+            col1, col2, col3 = st.columns(3)
+            col1.metric("🚨 Fuel Siphoning Alerts", siphoning_count)
+            col2.metric("⏱️ Excessive Idle Incidents", excessive_idle)
+            col3.metric("🛣️ Route Deviations Flagged", route_deviations)
+            
+            st.markdown("---")
+            st.subheader("📋 Ingested Telematics Data Breakdown")
+            st.dataframe(df_tele, use_container_width=True)
+
+        except Exception as e:
+            st.error(f"Error parsing telematics log: {str(e)}")
+    else:
+        # Placeholder view when no file is uploaded yet
+        st.write("---")
+        st.subheader("Expected Log Format Preview")
+        preview_data = pd.DataFrame({
+            "Truck_ID": ["KCD 123X", "KDA 456Y", "KDB 789Z"],
+            "Driver": ["John Doe", "Peter Otieno", "James Mwangi"],
+            "Planned_KM": [150, 320, 85],
+            "Actual_KM": [182, 321, 86],
+            "Idle_Hours": [3.5, 0.8, 4.2],
+            "Fuel_Drop_Liters": [18.5, 0.0, 22.0],
+            "Status": ["⚠️ Route Deviation & Siphoning", "✅ Compliant", "⚠️ Excessive Idling & Siphoning"]
+        })
+        st.dataframe(preview_data, use_container_width=True)
 
 # MOMBASA PORT & ICD DEMURRAGE CALCULATOR TAB
 with tabs[2]:
