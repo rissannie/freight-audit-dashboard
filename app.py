@@ -599,7 +599,7 @@ with tabs[1]:
                     y="Fuel_Drop_Liters", 
                     color="Driver",
                     title="Suspected Siphoning Vol (Liters)",
-                    color_discrete_sequence=px.colors.qualitative.Reds_r
+                  color_discrete_sequence=px.colors.qualitative.Plotly
                 )
                 st.plotly_chart(fig_fuel, use_container_width=True)
             else:
