@@ -314,13 +314,13 @@ def generate_batch_summary_pdf(df):
 st.title("🚛 Enterprise Freight Audit & Reconciliation")
 
 tabs = st.tabs([
-    "📋 Active Audit Engine", 
-    "⛽ Fleet & Fuel Telematics",   # <--- Must be index 1
-    "🌍 Cross-Border Audit",       # <--- Becomes index 2
-    "⚓ Port Demurrage Tool", 
-    "📊 Carrier Scorecards", 
-    "📜 Dispute Ledger", 
-    "👤 User Profile"
+    "📋 Active Audit Engine",       # Index 0
+    "⛽ Fleet & Fuel Telematics",   # Index 1
+    "🌍 Cross-Border Audit",        # Index 2
+    "⚓ Port Demurrage Tool",       # Index 3
+    "📊 Carrier Scorecards",        # Index 4
+    "📜 Dispute Ledger",            # Index 5
+    "👤 User Profile"               # Index 6
 ])
 
 with tabs[0]:
