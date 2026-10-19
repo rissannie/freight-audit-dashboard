@@ -527,14 +527,20 @@ with tabs[1]:
     if total_cross_border_claim_usd > 0:
         st.warning(f"⚠️ Cross-border billing variance detected: Total Claim USD {total_cross_border_claim_usd:,.2f}")
         # ==========================================
-# ⛽ FLEET & FUEL TELEMATICS MONITOR (TRUFOODS MODULE)
+# ==========================================
+# ⛽ FLEET & FUEL TELEMATICS MONITOR (TRUFOODS COMPLIANCE MODULE)
 # ==========================================
 with tabs[1]:
     st.header("⛽ Real-Time Fleet & Fuel Telematics Monitor")
-    st.info("Upload daily GPS / Fuel Card CSV logs to detect fuel siphoning, route deviations, and excessive idling.")
+    st.info("Automated monitoring for fuel pilferage, route deviations, excessive idling, and maintenance alerts.")
     
-    # Sample file download option for testing
-    st.caption("Don't have a log? Upload any CSV file with columns: Truck_ID, Driver, Planned_KM, Actual_KM, Idle_Hours, Fuel_Drop_Liters")
+    # 1. Actionable Controls Bar
+    col_a, col_b, col_c = st.columns(3)
+    fuel_price = col_a.number_input("Fuel Cost Rate (KES / Liter)", value=210.0, step=5.0)
+    idle_fuel_rate = col_b.number_input("Idle Burn Rate (Liters / Hour)", value=2.5, step=0.5)
+    max_idle_threshold = col_c.slider("Max Allowed Idle Time (Hours)", 0.5, 5.0, 2.0)
+
+    st.markdown("---")
 
     telematics_file = st.file_uploader("Upload Telematics/GPS Log (.csv, .xlsx)", type=["csv", "xlsx"], key="telematics_upload")
     
@@ -544,51 +550,95 @@ with tabs[1]:
                 df_tele = pd.read_csv(telematics_file)
             else:
                 df_tele = pd.read_excel(telematics_file)
-            
-            st.success("Telematics log loaded successfully!")
-            
-            # Smart Column Detection & Defaults
-            fuel_col = [c for c in df_tele.columns if 'fuel' in c.lower() or 'drop' in c.lower() or 'liters' in c.lower()]
-            idle_col = [c for c in df_tele.columns if 'idle' in c.lower()]
-            actual_km_col = [c for c in df_tele.columns if 'actual' in c.lower() or 'km' in c.lower()]
-            planned_km_col = [c for c in df_tele.columns if 'planned' in c.lower() or 'route' in c.lower()]
-
-            # Default metrics
-            siphoning_count = len(df_tele[df_tele[fuel_col[0]] > 10]) if fuel_col else 0
-            excessive_idle = len(df_tele[df_tele[idle_col[0]] > 2.0]) if idle_col else 0
-            
-            if actual_km_col and planned_km_col:
-                route_deviations = len(df_tele[df_tele[actual_km_col[0]] > (df_tele[planned_km_col[0]] * 1.10)])
-            else:
-                route_deviations = 0
-
-            # Display Key Metrics Dashboard
-            col1, col2, col3 = st.columns(3)
-            col1.metric("🚨 Fuel Siphoning Alerts", siphoning_count)
-            col2.metric("⏱️ Excessive Idle Incidents", excessive_idle)
-            col3.metric("🛣️ Route Deviations Flagged", route_deviations)
-            
-            st.markdown("---")
-            st.subheader("📋 Ingested Telematics Data Breakdown")
-            st.dataframe(df_tele, use_container_width=True)
-
+            st.success("Telematics log parsed successfully!")
         except Exception as e:
-            st.error(f"Error parsing telematics log: {str(e)}")
+            st.error(f"Error parsing log: {str(e)}")
+            df_tele = None
     else:
-        # Placeholder view when no file is uploaded yet
-        st.write("---")
-        st.subheader("Expected Log Format Preview")
-        preview_data = pd.DataFrame({
-            "Truck_ID": ["KCD 123X", "KDA 456Y", "KDB 789Z"],
-            "Driver": ["John Doe", "Peter Otieno", "James Mwangi"],
-            "Planned_KM": [150, 320, 85],
-            "Actual_KM": [182, 321, 86],
-            "Idle_Hours": [3.5, 0.8, 4.2],
-            "Fuel_Drop_Liters": [18.5, 0.0, 22.0],
-            "Status": ["⚠️ Route Deviation & Siphoning", "✅ Compliant", "⚠️ Excessive Idling & Siphoning"]
+        # Default Sample Dataset for Demo / Immediate Visual Preview
+        df_tele = pd.DataFrame({
+            "Truck_ID": ["KCD 123X", "KDA 456Y", "KDB 789Z", "KDC 321A", "KDD 654B"],
+            "Driver": ["John Doe", "Peter Otieno", "James Mwangi", "David Wanjala", "Hassan Ali"],
+            "Planned_KM": [150, 320, 85, 410, 200],
+            "Actual_KM": [182, 321, 105, 412, 245],
+            "Idle_Hours": [3.5, 0.8, 4.2, 1.2, 5.0],
+            "Fuel_Drop_Liters": [18.5, 0.0, 22.0, 0.0, 31.0],
+            "Geofence_Breach": ["Yes", "No", "Yes", "No", "Yes"],
+            "Weekly_Total_KM": [1250, 800, 1450, 920, 1600]
         })
-        st.dataframe(preview_data, use_container_width=True)
 
+    if df_tele is not None:
+        # Automated Rule Computations
+        siphoning_df = df_tele[df_tele['Fuel_Drop_Liters'] > 10.0]
+        idling_df = df_tele[df_tele['Idle_Hours'] > max_idle_threshold]
+        route_dev_df = df_tele[df_tele['Actual_KM'] > (df_tele['Planned_KM'] * 1.10)]
+        maintenance_df = df_tele[df_tele['Weekly_Total_KM'] > 1200]
+
+        # Financial Impact Calculations
+        total_fuel_lost_liters = siphoning_df['Fuel_Drop_Liters'].sum() + (idling_df['Idle_Hours'].sum() * idle_fuel_rate)
+        total_cash_loss_kes = total_fuel_lost_liters * fuel_price
+
+        # Top Executive Metrics
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("🚨 Fuel Siphoning Incidents", len(siphoning_df))
+        m2.metric("⏱️ Excessive Idling Vehicles", len(idling_df))
+        m3.metric("🛣️ Route Deviations", len(route_dev_df))
+        m4.metric("💰 Est. Cash Leakage", f"KES {total_cash_loss_kes:,.2f}")
+
+        st.markdown("---")
+
+        # Visual Analytics Section
+        col_left, col_right = st.columns(2)
+
+        with col_left:
+            st.subheader("📊 Fuel Siphoning & Pilferage Alerts")
+            if len(siphoning_df) > 0:
+                fig_fuel = px.bar(
+                    siphoning_df, 
+                    x="Truck_ID", 
+                    y="Fuel_Drop_Liters", 
+                    color="Driver",
+                    title="Suspected Siphoning Vol (Liters)",
+                    color_discrete_sequence=px.colors.qualitative.Reds_r
+                )
+                st.plotly_chart(fig_fuel, use_container_width=True)
+            else:
+                st.success("No fuel siphoning anomalies detected.")
+
+        with col_right:
+            st.subheader("🛣️ Route Distance Drift vs Planned")
+            fig_route = px.scatter(
+                df_tele, 
+                x="Planned_KM", 
+                y="Actual_KM", 
+                color="Geofence_Breach",
+                size="Idle_Hours",
+                hover_data=["Truck_ID", "Driver"],
+                title="Planned vs Actual Distance (Size = Idle Hours)"
+            )
+            st.plotly_chart(fig_route, use_container_width=True)
+
+        # Maintenance & Compliance Warning Block
+        st.subheader("🛠️ Preventive Maintenance & Exception Escalations")
+        if len(maintenance_df) > 0:
+            for idx, row in maintenance_df.iterrows():
+                st.warning(
+                    f"⚠️ **Vehicle High Wear Alert ({row['Truck_ID']})**: Driven {row['Weekly_Total_KM']} KM this week with {row['Idle_Hours']} hrs idling. "
+                    f"Assigned Driver: **{row['Driver']}**. Recommended for preventive service check."
+                )
+
+        # Full Data Breakdown Table
+        st.subheader("📋 Ingested Telematics Exception Ledger")
+        st.dataframe(df_tele, use_container_width=True)
+
+        # Downloadable Exception Report Button
+        csv_data = df_tele.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Download Logistics Exception Report (CSV)",
+            data=csv_data,
+            file_name="Trufoods_Fleet_Exception_Report.csv",
+            mime="text/csv"
+        )
 # MOMBASA PORT & ICD DEMURRAGE CALCULATOR TAB
 with tabs[2]:
     st.subheader("⚓ Mombasa Port & ICD Demurrage Auditor")
