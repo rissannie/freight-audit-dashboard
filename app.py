@@ -472,7 +472,7 @@ Freight Audit Team
         st.info("👈 Upload PDF Invoices and Rate Cards in the sidebar to view audit extraction results.")
 
 # CROSS-BORDER TAB
-with tabs[1]:
+with tabs[2]:
     st.subheader("🌍 East & Southern Africa Cross-Border Freight Audit")
     
     col1, col2, col3 = st.columns(3)
@@ -529,7 +529,7 @@ with tabs[1]:
         # ==========================================
 # ==========================================
 # ⛽ FLEET & FUEL TELEMATICS MONITOR (TRUFOODS COMPLIANCE MODULE)
-# ==========================================
+# =========================================
 with tabs[1]:
     st.header("⛽ Real-Time Fleet & Fuel Telematics Monitor")
     st.info("Automated monitoring for fuel pilferage, route deviations, excessive idling, and maintenance alerts.")
@@ -640,7 +640,7 @@ with tabs[1]:
             mime="text/csv"
         )
 # MOMBASA PORT & ICD DEMURRAGE CALCULATOR TAB
-with tabs[2]:
+with tabs[3]:
     st.subheader("⚓ Mombasa Port & ICD Demurrage Auditor")
     st.write("Calculate free-period allowances and audit container detention charges.")
 
@@ -672,7 +672,7 @@ with tabs[2]:
     if demurrage_overcharge > 0:
         st.error(f"⚠️ Flagged Demurrage Overcharge: Carrier overbilled by KES {demurrage_overcharge:,.2f}.")
 
-with tabs[3]:
+with tabs[4]:
     st.subheader("📊 Carrier Analytics")
     df_active = st.session_state.get("audit_data", pd.DataFrame())
     if not df_active.empty and "Carrier" in df_active.columns:
@@ -680,7 +680,7 @@ with tabs[3]:
         fig = px.bar(summary_df, x="Carrier", y="Total_Overcharge", title="Total Claims by Carrier (KES)", color="Carrier", text_auto='.2f')
         st.plotly_chart(fig, use_container_width=True)
 
-with tabs[4]:
+with tabs[5]:
     st.subheader("📜 Audit Trail & Dispute History")
     conn = sqlite3.connect(DB_FILE)
     df_ledger = pd.read_sql_query("SELECT timestamp, invoice_no, carrier, total_overcharge, audit_status, dispute_status FROM audit_ledger ORDER BY timestamp DESC", conn)
