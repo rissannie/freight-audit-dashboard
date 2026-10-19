@@ -528,7 +528,7 @@ with tabs[1]:
         st.warning(f"⚠️ Cross-border billing variance detected: Total Claim USD {total_cross_border_claim_usd:,.2f}")
         # ==========================================
 # ==========================================
-⛽ FLEET & FUEL TELEMATICS MONITOR (TRUFOODS COMPLIANCE MODULE)
+# ⛽ FLEET & FUEL TELEMATICS MONITOR (TRUFOODS COMPLIANCE MODULE)
 # ==========================================
 with tabs[1]:
     st.header("⛽ Real-Time Fleet & Fuel Telematics Monitor")
