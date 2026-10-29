@@ -25,7 +25,7 @@ st.set_page_config(page_title="Enterprise Freight Audit", layout="wide")
 
 st.markdown("""
     <style>
-   div[data-testid="stMetricValue"] { color: #1E3A8A; font-weight: 800; font-size: 1.8rem !important; white-space: normal !important; word-break: break-word !important; }
+    div[data-testid="stMetricValue"] { color: #1E3A8A; font-weight: 800; font-size: 1.8rem !important; white-space: normal !important; word-break: break-word !important; }
     .stTabs [data-baseweb="tab"] { background-color: #F1F5F9; border-radius: 4px; padding: 0 16px; margin-right: 4px;}
     .stTabs [aria-selected="true"] { background-color: #1E3A8A !important; color: white !important; }
     div[data-testid="stSidebar"] { background-color: #F8FAFC; border-right: 1px solid #E2E8F0; }
