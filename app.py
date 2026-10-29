@@ -413,25 +413,52 @@ with tabs[0]:
     df_active = st.session_state.get("audit_data", pd.DataFrame())
 
     total_recovered = 0.0
+    total_leakage = 0.0
     clean_count = 0
     invalid_etims_count = 0
 
     if not df_active.empty and "Total_Overcharge" in df_active.columns:
         total_recovered = df_active['Total_Overcharge'].sum()
+        total_leakage = df_active['Total_Overcharge'].sum()
         clean_count = len(df_active[df_active["Audit_Status"] == "PASSED_VERIFIED"])
         invalid_etims_count = len(df_active[~df_active["eTIMS_Valid"]])
 
-    c1, c2, c3, c4 = st.columns(4)
+    # Executive ROI / Financial Summary Banner
+    annualized_savings = total_recovered * 12
+    st.markdown(f"""
+        <div style="background-color: #1E3A8A; color: white; padding: 12px 20px; border-radius: 8px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
+            <div><strong>💼 Executive ROI Summary:</strong> Total Audit Value Processed: <strong>KES {total_recovered:,.2f}</strong></div>
+            <div>Estimated Annualized Fleet Savings: <strong style="color: #4ADE80;">KES {annualized_savings:,.2f}</strong></div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
-        colored_metric("Invoices Processed", str(len(df_active)), text_color="#1E3A8A")
+        colored_metric("Invoices", str(len(df_active)), text_color="#1E3A8A")
     with c2:
         colored_metric("Verified Clean", str(clean_count), text_color="#1E3A8A")
     with c3:
         colored_metric("Capital Saved", f"KES {total_recovered:,.2f}", text_color="#16A34A")
     with c4:
-        colored_metric("Non-Compliant eTIMS", str(invalid_etims_count), text_color="#DC2626")
+        colored_metric("Money Lost / Leakage", f"KES {total_leakage:,.2f}", text_color="#DC2626")
+    with c5:
+        colored_metric("Bad eTIMS", str(invalid_etims_count), text_color="#DC2626")
 
     st.markdown("---")
+    
+    # Interactive Methodology Explainer for CFO / Evaluators
+    with st.expander("🔍 Click to View Forensic Calculation Methodology & Formula Breakdown"):
+        st.markdown("""
+        ### **How Capital Saved & Money Lost Are Calculated:**
+        * **1. Freight Charge Variance Formula:**
+          $$\\text{Freight Overcharge} = \\text{Billed Freight Amount} - \\text{Contracted Base Rate}$$
+          * If variance exceeds the ignore threshold (e.g., KES 100), it is flagged as leakage.
+        * **2. FX Overcharge Premium Formula:**
+          $$\\text{FX Overcharge} = \\left(\\frac{\\text{Billed Base}}{\\text{CBK Benchmark FX}}\\right) \\times \\max(0, \\text{Carrier FX} - \\text{Benchmark FX})$$
+        * **3. Total Capital Saved / Leakage:**
+          $$\\text{Total Overcharge} = \\text{Freight Overcharge} + \\text{FX Overcharge}$$
+        """)
+
     c_left, c_right = st.columns([3, 1])
     with c_left:
         st.subheader("📋 Audit Extraction Results")
@@ -545,12 +572,30 @@ with tabs[1]:
         total_cash_loss_kes = total_fuel_lost_liters * fuel_price
 
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("🚨 Fuel Siphoning Incidents", len(siphoning_df))
-        m2.metric("⏱️ Excessive Idling Vehicles", len(idling_df))
-        m3.metric("🛣️ Route Deviations", len(route_dev_df))
-        m4.metric("💰 Est. Cash Leakage", f"KES {total_cash_loss_kes:,.2f}")
+        with m1:
+            colored_metric("🚨 Siphoning Incidents", str(len(siphoning_df)), text_color="#DC2626")
+        with m2:
+            colored_metric("⏱️ Excessive Idling", str(len(idling_df)), text_color="#D97706")
+        with m3:
+            colored_metric("🛣️ Route Deviations", str(len(route_dev_df)), text_color="#D97706")
+        with m4:
+            colored_metric("💰 Est. Cash Leakage", f"KES {total_cash_loss_kes:,.2f}", text_color="#DC2626")
 
         st.markdown("---")
+
+        # Interactive Telematics Methodology Explainer
+        with st.expander("🔍 Click to View Telematics Cash Leakage Formula Breakdown"):
+            st.markdown(f"""
+            ### **How Fuel Siphoning & Idling Losses Are Calculated:**
+            * **Input Parameters:** Fuel Cost = KES {fuel_price:.2f}/L | Idle Burn Rate = {idle_fuel_rate} L/hr
+            * **Step A: Siphoning Loss**
+              * Total Siphoned Volume = **{siphoning_df['Fuel_Drop_Liters'].sum():.1f} Liters**
+              * Siphoning Cash Loss = $\\text{{Volume}} \\times \\text{{Fuel Price}} = \\mathbf{{\\text{{KES }} {siphoning_df['Fuel_Drop_Liters'].sum() * fuel_price:,.2f}}}$
+            * **Step B: Excessive Idling Loss**
+              * Total Excess Idle Hours = **{idling_df['Idle_Hours'].sum():.1f} Hours**
+              * Fuel Consumed = $\\text{{Hours}} \\times \\text{{Burn Rate}} = {(idling_df['Idle_Hours'].sum() * idle_fuel_rate):.2f}\\text{{ Liters}}$
+              * Idling Cash Loss = $\\text{{Fuel}} \\times \\text{{Fuel Price}} = \\mathbf{{\\text{{KES }} {(idling_df['Idle_Hours'].sum() * idle_fuel_rate * fuel_price):,.2f}}}$
+            """)
 
         col_left, col_right = st.columns(2)
 
@@ -689,15 +734,29 @@ with tabs[3]:
     if demurrage_overcharge > 0:
         st.error(f"⚠️ Flagged Demurrage Overcharge: Carrier overbilled by KES {demurrage_overcharge:,.2f}.")
 
+# CARRIER SCORECARDS & MULTI-CARRIER LEADERBOARD TAB
 with tabs[4]:
-    st.subheader("📊 Carrier Analytics")
+    st.subheader("📊 Multi-Carrier Comparison & Overcharge Leaderboard")
+    st.info("Identify which transport agencies accumulate the highest financial overcharges and leakage.")
+    
     df_active = st.session_state.get("audit_data", pd.DataFrame())
-    if not df_active.empty and "Carrier" in df_active.columns:
-        summary_df = df_active.groupby("Carrier")["Total_Overcharge"].sum().reset_index()
-        fig = px.bar(summary_df, x="Carrier", y="Total_Overcharge", title="Total Claims by Carrier (KES)", color="Carrier", text_auto='.2f')
+    if not df_active.empty and "Carrier" in df_active.columns and "Total_Overcharge" in df_active.columns:
+        summary_df = df_active.groupby("Carrier")["Total_Overcharge"].sum().reset_index().sort_values(by="Total_Overcharge", ascending=False)
+        
+        fig = px.bar(
+            summary_df, 
+            x="Carrier", 
+            y="Total_Overcharge", 
+            title="Total Financial Overcharges by Carrier (KES)", 
+            color="Carrier", 
+            text_auto=',.2f',
+            color_discrete_sequence=px.colors.qualitative.Bold
+        )
         st.plotly_chart(fig, use_container_width=True)
+        
+        st.dataframe(summary_df, use_container_width=True)
     else:
-        st.info("No audit data available yet to generate carrier scorecards.")
+        st.info("No audit data available yet to generate carrier scorecards. Upload invoices on Tab 0 first.")
 
 with tabs[5]:
     st.subheader("📜 Audit Trail & Dispute History")
