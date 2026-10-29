@@ -480,16 +480,12 @@ Freight Audit Team
             c_btn1, c_btn2 = st.columns(2)
             with c_btn1:
                 st.download_button("📄 Download Debit Note (PDF)", generate_pdf_debit_note(row), f"Debit_Note_{selected_inv}.pdf", "application/pdf")
-            
-            if st.session_state["role"] in ["admin", "finance"]:
-                if st.button("🚀 Dispatch Dispute Email"):
-                    update_dispute_status(selected_inv, 'DISPUTE_SENT')
-                    st.success(f"Dispute logged and email dispatched for Invoice {selected_inv}!")
-        else:
-            st.info("No flagged invoices requiring dispute dispatching.")
+   if st.session_state["role"] in ["admin", "finance"]:
+        if st.button("🚀 Dispatch Dispute Email"):
+            update_dispute_status(selected_inv, 'DISPUTE_SENT')
+            st.success(f"Dispute logged and email dispatched for Invoice {selected_inv}!")
     else:
-        st.info("👈 Upload PDF Invoices and Rate Cards in the sidebar to view audit extraction results.")
-
+        st.info("Upload PDF Invoices and Rate Cards in the sidebar to view audit extraction results.")
 # CROSS-BORDER TAB
 with tabs[2]:
     st.subheader("🌍 East & Southern Africa Cross-Border Freight Audit")
