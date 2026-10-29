@@ -43,7 +43,9 @@ st.markdown("""
     h1, h2, h3 { color: #0F172A; }
     </style>
 """, unsafe_allow_html=True)
+
 DB_FILE = "freight_audit_ledger.db"
+
 def colored_metric(label, value, text_color="#1E3A8A"):
     st.markdown(f"""
         <div style="background-color: #F8FAFC; padding: 14px 18px; border-radius: 8px; border: 1px solid #E2E8F0; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
@@ -410,10 +412,15 @@ with tabs[0]:
 
     df_active = st.session_state.get("audit_data", pd.DataFrame())
 
+    total_recovered = 0.0
+    clean_count = 0
+    invalid_etims_count = 0
+
     if not df_active.empty and "Total_Overcharge" in df_active.columns:
         total_recovered = df_active['Total_Overcharge'].sum()
         clean_count = len(df_active[df_active["Audit_Status"] == "PASSED_VERIFIED"])
         invalid_etims_count = len(df_active[~df_active["eTIMS_Valid"]])
+
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         colored_metric("Invoices Processed", str(len(df_active)), text_color="#1E3A8A")
@@ -423,18 +430,20 @@ with tabs[0]:
         colored_metric("Capital Saved", f"KES {total_recovered:,.2f}", text_color="#16A34A")
     with c4:
         colored_metric("Non-Compliant eTIMS", str(invalid_etims_count), text_color="#DC2626")
-        st.markdown("---")
-        c_left, c_right = st.columns([3, 1])
-        with c_left:
-            st.subheader("📋 Audit Extraction Results")
-        with c_right:
-            st.download_button("📥 Executive PDF Report", generate_batch_summary_pdf(df_active), "Batch_Summary.pdf", "application/pdf")
-            
-        st.dataframe(
-            df_active[["Invoice_No", "Carrier", "Billed_Base", "Contract_Base", "Billed_FX_Rate", "eTIMS_CU_Serial", "Total_Overcharge", "Audit_Status"]], 
-            use_container_width=True
-        )
 
+    st.markdown("---")
+    c_left, c_right = st.columns([3, 1])
+    with c_left:
+        st.subheader("📋 Audit Extraction Results")
+    with c_right:
+        st.download_button("📥 Executive PDF Report", generate_batch_summary_pdf(df_active), "Batch_Summary.pdf", "application/pdf")
+        
+    st.dataframe(
+        df_active[["Invoice_No", "Carrier", "Billed_Base", "Contract_Base", "Billed_FX_Rate", "eTIMS_CU_Serial", "Total_Overcharge", "Audit_Status"]] if not df_active.empty else pd.DataFrame(), 
+        use_container_width=True
+    )
+
+    if not df_active.empty:
         flagged = df_active[df_active["Audit_Status"] != "PASSED_VERIFIED"].copy()
         
         valid_flagged_options = [
@@ -477,15 +486,124 @@ Freight Audit Team
                 st.text_area("Message Body:", value=email_body, height=180)
                 st.markdown(f"[📲 Send Dispute Summary via WhatsApp]({whatsapp_url})", unsafe_allow_html=True)
 
-           with c_btn1:
-        st.download_button("📑 Download Debit Note (PDF)", generate_pdf_debit_note(row), f"Debit_Note_{selected_inv}.pdf")
+            c_btn1, c_btn2 = st.columns(2)
+            with c_btn1:
+                st.download_button("📑 Download Debit Note (PDF)", generate_pdf_debit_note(row), f"Debit_Note_{selected_inv}.pdf")
 
-    if st.session_state["role"] in ["admin", "finance"]:
-        if st.button("🚀 Dispatch Dispute Email"):
-            update_dispute_status(selected_inv, 'DISPUTE_SENT')
-            st.success(f"Dispute logged and email dispatched for Invoice {selected_inv}!")
+            if st.session_state["role"] in ["admin", "finance"]:
+                if st.button("🚀 Dispatch Dispute Email"):
+                    update_dispute_status(selected_inv, 'DISPUTE_SENT')
+                    st.success(f"Dispute logged and email dispatched for Invoice {selected_inv}!")
+        else:
+            st.info("No flagged invoices requiring dispute dispatching.")
     else:
         st.info("Upload PDF Invoices and Rate Cards in the sidebar to view audit extraction results.")
+
+# ⛽ FLEET & FUEL TELEMATICS MONITOR (TRUFOODS COMPLIANCE MODULE)
+with tabs[1]:
+    st.header("⛽ Real-Time Fleet & Fuel Telematics Monitor")
+    st.info("Automated monitoring for fuel pilferage, route deviations, excessive idling, and maintenance alerts.")
+    
+    col_a, col_b, col_c = st.columns(3)
+    fuel_price = col_a.number_input("Fuel Cost Rate (KES / Liter)", value=210.0, step=5.0)
+    idle_fuel_rate = col_b.number_input("Idle Burn Rate (Liters / Hour)", value=2.5, step=0.5)
+    max_idle_threshold = col_c.slider("Max Allowed Idle Time (Hours)", 0.5, 5.0, 2.0)
+
+    st.markdown("---")
+
+    telematics_file = st.file_uploader("Upload Telematics/GPS Log (.csv, .xlsx)", type=["csv", "xlsx"], key="telematics_upload")
+    
+    if telematics_file:
+        try:
+            if telematics_file.name.endswith('.csv'):
+                df_tele = pd.read_csv(telematics_file)
+            else:
+                df_tele = pd.read_excel(telematics_file)
+            st.success("Telematics log parsed successfully!")
+        except Exception as e:
+            st.error(f"Error parsing log: {str(e)}")
+            df_tele = None
+    else:
+        df_tele = pd.DataFrame({
+            "Truck_ID": ["KCD 123X", "KDA 456Y", "KDB 789Z", "KDC 321A", "KDD 654B"],
+            "Driver": ["John Doe", "Peter Otieno", "James Mwangi", "David Wanjala", "Hassan Ali"],
+            "Planned_KM": [150, 320, 85, 410, 200],
+            "Actual_KM": [182, 321, 105, 412, 245],
+            "Idle_Hours": [3.5, 0.8, 4.2, 1.2, 5.0],
+            "Fuel_Drop_Liters": [18.5, 0.0, 22.0, 0.0, 31.0],
+            "Geofence_Breach": ["Yes", "No", "Yes", "No", "Yes"],
+            "Weekly_Total_KM": [1250, 800, 1450, 920, 1600]
+        })
+
+    if df_tele is not None:
+        siphoning_df = df_tele[df_tele['Fuel_Drop_Liters'] > 10.0]
+        idling_df = df_tele[df_tele['Idle_Hours'] > max_idle_threshold]
+        route_dev_df = df_tele[df_tele['Actual_KM'] > (df_tele['Planned_KM'] * 1.10)]
+        maintenance_df = df_tele[df_tele['Weekly_Total_KM'] > 1200]
+
+        total_fuel_lost_liters = siphoning_df['Fuel_Drop_Liters'].sum() + (idling_df['Idle_Hours'].sum() * idle_fuel_rate)
+        total_cash_loss_kes = total_fuel_lost_liters * fuel_price
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("🚨 Fuel Siphoning Incidents", len(siphoning_df))
+        m2.metric("⏱️ Excessive Idling Vehicles", len(idling_df))
+        m3.metric("🛣️ Route Deviations", len(route_dev_df))
+        m4.metric("💰 Est. Cash Leakage", f"KES {total_cash_loss_kes:,.2f}")
+
+        st.markdown("---")
+
+        col_left, col_right = st.columns(2)
+
+        with col_left:
+            st.subheader("📊 Fuel Siphoning & Pilferage Alerts")
+            if len(siphoning_df) > 0:
+                fig_fuel = px.bar(
+                    siphoning_df, 
+                    x="Truck_ID", 
+                    y="Fuel_Drop_Liters", 
+                    color="Driver",
+                    title="Suspected Siphoning Vol (Liters)",
+                    color_discrete_sequence=px.colors.qualitative.Plotly
+                )
+                st.plotly_chart(fig_fuel, use_container_width=True)
+            else:
+                st.success("No fuel siphoning anomalies detected.")
+
+        with col_right:
+            st.subheader("🛣️ Route Distance Drift vs Planned")
+            fig_route = px.scatter(
+                df_tele, 
+                x="Planned_KM", 
+                y="Actual_KM", 
+                color="Geofence_Breach",
+                size="Idle_Hours",
+                hover_data=["Truck_ID", "Driver"],
+                title="Planned vs Actual Distance (Size = Idle Hours)"
+            )
+            st.plotly_chart(fig_route, use_container_width=True)
+
+        st.subheader("🛠️ Preventive Maintenance & Exception Escalations")
+        if len(maintenance_df) > 0:
+            for idx, row in maintenance_df.iterrows():
+                st.warning(
+                    f"⚠️ **Vehicle High Wear Alert ({row['Truck_ID']})**: Driven {row['Weekly_Total_KM']} KM this week with {row['Idle_Hours']} hrs idling. "
+                    f"Assigned Driver: **{row['Driver']}**. Recommended for preventive service check."
+                )
+
+        st.subheader("📋 Ingested Telematics Exception Ledger")
+        st.dataframe(df_tele, use_container_width=True)
+
+        csv_data = df_tele.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Download Logistics Exception Report (CSV)",
+            data=csv_data,
+            file_name="Trufoods_Fleet_Exception_Report.csv",
+            mime="text/csv"
+        )
+
+# CROSS-BORDER AUDIT TAB
+with tabs[2]:
+    st.subheader("🌍 East & Southern Africa Cross-Border Freight Audit")
     col1, col2, col3 = st.columns(3)
     
     with col1:
@@ -537,119 +655,7 @@ Freight Audit Team
 
     if total_cross_border_claim_usd > 0:
         st.warning(f"⚠️ Cross-border billing variance detected: Total Claim USD {total_cross_border_claim_usd:,.2f}")
-        # ==========================================
-# ==========================================
-# ⛽ FLEET & FUEL TELEMATICS MONITOR (TRUFOODS COMPLIANCE MODULE)
-# =========================================
-with tabs[1]:
-    st.header("⛽ Real-Time Fleet & Fuel Telematics Monitor")
-    st.info("Automated monitoring for fuel pilferage, route deviations, excessive idling, and maintenance alerts.")
-    
-    # 1. Actionable Controls Bar
-    col_a, col_b, col_c = st.columns(3)
-    fuel_price = col_a.number_input("Fuel Cost Rate (KES / Liter)", value=210.0, step=5.0)
-    idle_fuel_rate = col_b.number_input("Idle Burn Rate (Liters / Hour)", value=2.5, step=0.5)
-    max_idle_threshold = col_c.slider("Max Allowed Idle Time (Hours)", 0.5, 5.0, 2.0)
 
-    st.markdown("---")
-
-    telematics_file = st.file_uploader("Upload Telematics/GPS Log (.csv, .xlsx)", type=["csv", "xlsx"], key="telematics_upload")
-    
-    if telematics_file:
-        try:
-            if telematics_file.name.endswith('.csv'):
-                df_tele = pd.read_csv(telematics_file)
-            else:
-                df_tele = pd.read_excel(telematics_file)
-            st.success("Telematics log parsed successfully!")
-        except Exception as e:
-            st.error(f"Error parsing log: {str(e)}")
-            df_tele = None
-    else:
-        # Default Sample Dataset for Demo / Immediate Visual Preview
-        df_tele = pd.DataFrame({
-            "Truck_ID": ["KCD 123X", "KDA 456Y", "KDB 789Z", "KDC 321A", "KDD 654B"],
-            "Driver": ["John Doe", "Peter Otieno", "James Mwangi", "David Wanjala", "Hassan Ali"],
-            "Planned_KM": [150, 320, 85, 410, 200],
-            "Actual_KM": [182, 321, 105, 412, 245],
-            "Idle_Hours": [3.5, 0.8, 4.2, 1.2, 5.0],
-            "Fuel_Drop_Liters": [18.5, 0.0, 22.0, 0.0, 31.0],
-            "Geofence_Breach": ["Yes", "No", "Yes", "No", "Yes"],
-            "Weekly_Total_KM": [1250, 800, 1450, 920, 1600]
-        })
-
-    if df_tele is not None:
-        # Automated Rule Computations
-        siphoning_df = df_tele[df_tele['Fuel_Drop_Liters'] > 10.0]
-        idling_df = df_tele[df_tele['Idle_Hours'] > max_idle_threshold]
-        route_dev_df = df_tele[df_tele['Actual_KM'] > (df_tele['Planned_KM'] * 1.10)]
-        maintenance_df = df_tele[df_tele['Weekly_Total_KM'] > 1200]
-
-        # Financial Impact Calculations
-        total_fuel_lost_liters = siphoning_df['Fuel_Drop_Liters'].sum() + (idling_df['Idle_Hours'].sum() * idle_fuel_rate)
-        total_cash_loss_kes = total_fuel_lost_liters * fuel_price
-
-        # Top Executive Metrics
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("🚨 Fuel Siphoning Incidents", len(siphoning_df))
-        m2.metric("⏱️ Excessive Idling Vehicles", len(idling_df))
-        m3.metric("🛣️ Route Deviations", len(route_dev_df))
-        m4.metric("💰 Est. Cash Leakage", f"KES {total_cash_loss_kes:,.2f}")
-
-        st.markdown("---")
-
-        # Visual Analytics Section
-        col_left, col_right = st.columns(2)
-
-        with col_left:
-            st.subheader("📊 Fuel Siphoning & Pilferage Alerts")
-            if len(siphoning_df) > 0:
-                fig_fuel = px.bar(
-                    siphoning_df, 
-                    x="Truck_ID", 
-                    y="Fuel_Drop_Liters", 
-                    color="Driver",
-                    title="Suspected Siphoning Vol (Liters)",
-                  color_discrete_sequence=px.colors.qualitative.Plotly
-                )
-                st.plotly_chart(fig_fuel, use_container_width=True)
-            else:
-                st.success("No fuel siphoning anomalies detected.")
-
-        with col_right:
-            st.subheader("🛣️ Route Distance Drift vs Planned")
-            fig_route = px.scatter(
-                df_tele, 
-                x="Planned_KM", 
-                y="Actual_KM", 
-                color="Geofence_Breach",
-                size="Idle_Hours",
-                hover_data=["Truck_ID", "Driver"],
-                title="Planned vs Actual Distance (Size = Idle Hours)"
-            )
-            st.plotly_chart(fig_route, use_container_width=True)
-
-        # Maintenance & Compliance Warning Block
-        st.subheader("🛠️ Preventive Maintenance & Exception Escalations")
-        if len(maintenance_df) > 0:
-            for idx, row in maintenance_df.iterrows():
-                st.warning(
-                    f"⚠️ **Vehicle High Wear Alert ({row['Truck_ID']})**: Driven {row['Weekly_Total_KM']} KM this week with {row['Idle_Hours']} hrs idling. "
-                    f"Assigned Driver: **{row['Driver']}**. Recommended for preventive service check."
-                )
-
-        # Full Data Breakdown Table
-        st.subheader("📋 Ingested Telematics Exception Ledger")
-        st.dataframe(df_tele, use_container_width=True)
-
-        # Downloadable Exception Report Button
-        csv_data = df_tele.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📥 Download Logistics Exception Report (CSV)",
-            data=csv_data,
-            file_name="Trufoods_Fleet_Exception_Report.csv",
-            mime="text/csv"
-        )
 # MOMBASA PORT & ICD DEMURRAGE CALCULATOR TAB
 with tabs[3]:
     st.subheader("⚓ Mombasa Port & ICD Demurrage Auditor")
@@ -690,6 +696,8 @@ with tabs[4]:
         summary_df = df_active.groupby("Carrier")["Total_Overcharge"].sum().reset_index()
         fig = px.bar(summary_df, x="Carrier", y="Total_Overcharge", title="Total Claims by Carrier (KES)", color="Carrier", text_auto='.2f')
         st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No audit data available yet to generate carrier scorecards.")
 
 with tabs[5]:
     st.subheader("📜 Audit Trail & Dispute History")
@@ -698,7 +706,9 @@ with tabs[5]:
     conn.close()
     if not df_ledger.empty:
         st.dataframe(df_ledger, use_container_width=True)
+    else:
+        st.info("No records found in audit ledger.")
 
-with tabs[5]:
+with tabs[6]:
     st.subheader("👤 User Profile")
     st.write(f"Logged in user: **{st.session_state['username']}** | Role: **{st.session_state['role']}**")
