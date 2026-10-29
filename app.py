@@ -540,6 +540,7 @@ with tabs[1]:
 
     telematics_file = st.file_uploader("Upload Telematics/GPS Log (.csv, .xlsx)", type=["csv", "xlsx"], key="telematics_upload")
     
+    df_tele = pd.DataFrame()
     if telematics_file:
         try:
             if telematics_file.name.endswith('.csv'):
@@ -549,26 +550,16 @@ with tabs[1]:
             st.success("Telematics log parsed successfully!")
         except Exception as e:
             st.error(f"Error parsing log: {str(e)}")
-            df_tele = None
-    else:
-        df_tele = pd.DataFrame({
-            "Truck_ID": ["KCD 123X", "KDA 456Y", "KDB 789Z", "KDC 321A", "KDD 654B"],
-            "Driver": ["John Doe", "Peter Otieno", "James Mwangi", "David Wanjala", "Hassan Ali"],
-            "Planned_KM": [150, 320, 85, 410, 200],
-            "Actual_KM": [182, 321, 105, 412, 245],
-            "Idle_Hours": [3.5, 0.8, 4.2, 1.2, 5.0],
-            "Fuel_Drop_Liters": [18.5, 0.0, 22.0, 0.0, 31.0],
-            "Geofence_Breach": ["Yes", "No", "Yes", "No", "Yes"],
-            "Weekly_Total_KM": [1250, 800, 1450, 920, 1600]
-        })
+            df_tele = pd.DataFrame()
 
-    if df_tele is not None:
-        siphoning_df = df_tele[df_tele['Fuel_Drop_Liters'] > 10.0]
-        idling_df = df_tele[df_tele['Idle_Hours'] > max_idle_threshold]
-        route_dev_df = df_tele[df_tele['Actual_KM'] > (df_tele['Planned_KM'] * 1.10)]
-        maintenance_df = df_tele[df_tele['Weekly_Total_KM'] > 1200]
+    if not df_tele.empty:
+        siphoning_df = df_tele[df_tele['Fuel_Drop_Liters'] > 10.0] if 'Fuel_Drop_Liters' in df_tele.columns else pd.DataFrame()
+        idling_df = df_tele[df_tele['Idle_Hours'] > max_idle_threshold] if 'Idle_Hours' in df_tele.columns else pd.DataFrame()
+        route_dev_df = df_tele[df_tele['Actual_KM'] > (df_tele['Planned_KM'] * 1.10)] if 'Actual_KM' in df_tele.columns and 'Planned_KM' in df_tele.columns else pd.DataFrame()
+        maintenance_df = df_tele[df_tele['Weekly_Total_KM'] > 1200] if 'Weekly_Total_KM' in df_tele.columns else pd.DataFrame()
 
-        total_fuel_lost_liters = siphoning_df['Fuel_Drop_Liters'].sum() + (idling_df['Idle_Hours'].sum() * idle_fuel_rate)
+        total_fuel_lost_liters = (siphoning_df['Fuel_Drop_Liters'].sum() if not siphoning_df.empty else 0.0) + \
+                                 ((idling_df['Idle_Hours'].sum() if not idling_df.empty else 0.0) * idle_fuel_rate)
         total_cash_loss_kes = total_fuel_lost_liters * fuel_price
 
         m1, m2, m3, m4 = st.columns(4)
@@ -583,25 +574,26 @@ with tabs[1]:
 
         st.markdown("---")
 
-        # Interactive Telematics Methodology Explainer
         with st.expander("🔍 Click to View Telematics Cash Leakage Formula Breakdown"):
+            sip_sum = siphoning_df['Fuel_Drop_Liters'].sum() if not siphoning_df.empty else 0.0
+            idle_sum = idling_df['Idle_Hours'].sum() if not idling_df.empty else 0.0
             st.markdown(f"""
             ### **How Fuel Siphoning & Idling Losses Are Calculated:**
             * **Input Parameters:** Fuel Cost = KES {fuel_price:.2f}/L | Idle Burn Rate = {idle_fuel_rate} L/hr
             * **Step A: Siphoning Loss**
-              * Total Siphoned Volume = **{siphoning_df['Fuel_Drop_Liters'].sum():.1f} Liters**
-              * Siphoning Cash Loss = $\\text{{Volume}} \\times \\text{{Fuel Price}} = \\mathbf{{\\text{{KES }} {siphoning_df['Fuel_Drop_Liters'].sum() * fuel_price:,.2f}}}$
+              * Total Siphoned Volume = **{sip_sum:.1f} Liters**
+              * Siphoning Cash Loss = $\\text{{Volume}} \\times \\text{{Fuel Price}} = \\mathbf{{\\text{{KES }} {sip_sum * fuel_price:,.2f}}}$
             * **Step B: Excessive Idling Loss**
-              * Total Excess Idle Hours = **{idling_df['Idle_Hours'].sum():.1f} Hours**
-              * Fuel Consumed = $\\text{{Hours}} \\times \\text{{Burn Rate}} = {(idling_df['Idle_Hours'].sum() * idle_fuel_rate):.2f}\\text{{ Liters}}$
-              * Idling Cash Loss = $\\text{{Fuel}} \\times \\text{{Fuel Price}} = \\mathbf{{\\text{{KES }} {(idling_df['Idle_Hours'].sum() * idle_fuel_rate * fuel_price):,.2f}}}$
+              * Total Excess Idle Hours = **{idle_sum:.1f} Hours**
+              * Fuel Consumed = $\\text{{Hours}} \\times \\text{{Burn Rate}} = {(idle_sum * idle_fuel_rate):.2f}\\text{{ Liters}}$
+              * Idling Cash Loss = $\\text{{Fuel}} \\times \\text{{Fuel Price}} = \\mathbf{{\\text{{KES }} {(idle_sum * idle_fuel_rate * fuel_price):,.2f}}}$
             """)
 
         col_left, col_right = st.columns(2)
 
         with col_left:
             st.subheader("📊 Fuel Siphoning & Pilferage Alerts")
-            if len(siphoning_df) > 0:
+            if not siphoning_df.empty:
                 fig_fuel = px.bar(
                     siphoning_df, 
                     x="Truck_ID", 
@@ -616,23 +608,26 @@ with tabs[1]:
 
         with col_right:
             st.subheader("🛣️ Route Distance Drift vs Planned")
-            fig_route = px.scatter(
-                df_tele, 
-                x="Planned_KM", 
-                y="Actual_KM", 
-                color="Geofence_Breach",
-                size="Idle_Hours",
-                hover_data=["Truck_ID", "Driver"],
-                title="Planned vs Actual Distance (Size = Idle Hours)"
-            )
-            st.plotly_chart(fig_route, use_container_width=True)
+            if 'Planned_KM' in df_tele.columns and 'Actual_KM' in df_tele.columns:
+                fig_route = px.scatter(
+                    df_tele, 
+                    x="Planned_KM", 
+                    y="Actual_KM", 
+                    color="Geofence_Breach" if "Geofence_Breach" in df_tele.columns else None,
+                    size="Idle_Hours" if "Idle_Hours" in df_tele.columns else None,
+                    hover_data=["Truck_ID", "Driver"] if "Truck_ID" in df_tele.columns else None,
+                    title="Planned vs Actual Distance"
+                )
+                st.plotly_chart(fig_route, use_container_width=True)
+            else:
+                st.info("Missing Planned_KM or Actual_KM columns for route scatter plot.")
 
-        st.subheader("🛠️ Preventive Maintenance & Exception Escalations")
-        if len(maintenance_df) > 0:
+        if not maintenance_df.empty:
+            st.subheader("🛠️ Preventive Maintenance & Exception Escalations")
             for idx, row in maintenance_df.iterrows():
                 st.warning(
-                    f"⚠️ **Vehicle High Wear Alert ({row['Truck_ID']})**: Driven {row['Weekly_Total_KM']} KM this week with {row['Idle_Hours']} hrs idling. "
-                    f"Assigned Driver: **{row['Driver']}**. Recommended for preventive service check."
+                    f"⚠️ **Vehicle High Wear Alert ({row.get('Truck_ID', 'N/A')})**: Driven {row.get('Weekly_Total_KM', 0)} KM this week with {row.get('Idle_Hours', 0)} hrs idling. "
+                    f"Assigned Driver: **{row.get('Driver', 'N/A')}**. Recommended for preventive service check."
                 )
 
         st.subheader("📋 Ingested Telematics Exception Ledger")
@@ -645,6 +640,18 @@ with tabs[1]:
             file_name="Trufoods_Fleet_Exception_Report.csv",
             mime="text/csv"
         )
+    else:
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            colored_metric("🚨 Siphoning Incidents", "0", text_color="#DC2626")
+        with m2:
+            colored_metric("⏱️ Excessive Idling", "0", text_color="#D97706")
+        with m3:
+            colored_metric("🛣️ Route Deviations", "0", text_color="#D97706")
+        with m4:
+            colored_metric("💰 Est. Cash Leakage", "KES 0.00", text_color="#DC2626")
+        st.markdown("---")
+        st.info("👆 Please upload a Telematics/GPS Log (.csv or .xlsx) above to activate fleet tracking and view fuel leakages.")
 
 # CROSS-BORDER AUDIT TAB
 with tabs[2]:
