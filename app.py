@@ -25,14 +25,24 @@ st.set_page_config(page_title="Enterprise Freight Audit", layout="wide")
 
 st.markdown("""
     <style>
-    div[data-testid="stMetricValue"] { color: #1E3A8A; font-weight: 800; font-size: 1.8rem !important; white-space: normal !important; word-break: break-word !important; }
+    /* Force full metric display and prevent ellipsis truncation */
+    [data-testid="stMetricValue"] { 
+        font-size: 1.3rem !important; 
+        white-space: normal !important; 
+        word-break: break-word !important; 
+        overflow: visible !important;
+    }
+    [data-testid="stMetric"] {
+        width: 100% !important;
+    }
+    
+    /* Existing app styling */
     .stTabs [data-baseweb="tab"] { background-color: #F1F5F9; border-radius: 4px; padding: 0 16px; margin-right: 4px;}
     .stTabs [aria-selected="true"] { background-color: #1E3A8A !important; color: white !important; }
     div[data-testid="stSidebar"] { background-color: #F8FAFC; border-right: 1px solid #E2E8F0; }
     h1, h2, h3 { color: #0F172A; }
     </style>
 """, unsafe_allow_html=True)
-
 DB_FILE = "freight_audit_ledger.db"
 
 def hash_password(password: str) -> str:
