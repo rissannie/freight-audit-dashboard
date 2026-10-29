@@ -44,6 +44,13 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 DB_FILE = "freight_audit_ledger.db"
+def colored_metric(label, value, text_color="#1E3A8A"):
+    st.markdown(f"""
+        <div style="background-color: #F8FAFC; padding: 14px 18px; border-radius: 8px; border: 1px solid #E2E8F0; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+            <div style="color: #64748B; font-size: 0.85rem; font-weight: 600; text-transform: uppercase; margin-bottom: 6px;">{label}</div>
+            <div style="color: {text_color}; font-size: 1.6rem; font-weight: 800; line-height: 1.2;">{value}</div>
+        </div>
+    """, unsafe_allow_html=True)
 
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
@@ -408,12 +415,15 @@ with tabs[0]:
         clean_count = len(df_active[df_active["Audit_Status"] == "PASSED_VERIFIED"])
         invalid_etims_count = len(df_active[~df_active["eTIMS_Valid"]])
 
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Invoices Processed", len(df_active))
-        c2.metric("Verified Clean", clean_count)
-        c3.metric("Capital Saved", f"KES {total_recovered:,.2f}")
-        c4.metric("Non-Compliant eTIMS", invalid_etims_count)
-
+      c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        colored_metric("Invoices Processed", str(len(df_active)), text_color="#1E3A8A")
+    with c2:
+        colored_metric("Verified Clean", str(clean_count), text_color="#1E3A8A")
+    with c3:
+        colored_metric("Capital Saved", f"KES {total_recovered:,.2f}", text_color="#16A34A")
+    with c4:
+        colored_metric("Non-Compliant eTIMS", str(invalid_etims_count), text_color="#DC2626")
         st.markdown("---")
         c_left, c_right = st.columns([3, 1])
         with c_left:
