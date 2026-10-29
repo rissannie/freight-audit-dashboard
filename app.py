@@ -414,7 +414,7 @@ with tabs[0]:
         total_recovered = df_active['Total_Overcharge'].sum()
         clean_count = len(df_active[df_active["Audit_Status"] == "PASSED_VERIFIED"])
         invalid_etims_count = len(df_active[~df_active["eTIMS_Valid"]])
- c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
         colored_metric("Invoices Processed", str(len(df_active)), text_color="#1E3A8A")
     with c2:
