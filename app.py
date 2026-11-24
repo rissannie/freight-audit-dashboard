@@ -19,63 +19,145 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 
 # ------------------------------------------------------------------------------
-# 1. PAGE CONFIGURATION & UI STYLING
+# 1. PAGE CONFIGURATION & EXECUTIVE COLOR PALETTE
 # ------------------------------------------------------------------------------
-st.set_page_config(page_title="Enterprise Freight Audit", layout="wide")
+st.set_page_config(
+    page_title="Enterprise Freight Audit & Telematics",
+    page_icon="🚛",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 st.markdown("""
     <style>
-    /* Force full metric display and prevent ellipsis truncation */
-    [data-testid="stMetricValue"] { 
-        font-size: 1.3rem !important; 
-        white-space: normal !important; 
-        word-break: break-word !important; 
+    /* Executive Slate & Navy Palette */
+    .stApp {
+        background: linear-gradient(180deg, #F1F5F9 0%, #E2E8F0 100%);
+        color: #0F172A;
+    }
+    .main .block-container {
+        padding-top: 1.4rem;
+        padding-bottom: 2.5rem;
+    }
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #0F172A 0%, #1E293B 100%);
+        border-right: 1px solid #334155;
+    }
+    [data-testid="stSidebar"] * {
+        color: #F8FAFC !important;
+    }
+    [data-testid="stSidebar"] input,
+    [data-testid="stSidebar"] select,
+    [data-testid="stSidebar"] textarea {
+        color: #0F172A !important;
+        background-color: #FFFFFF !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] {
+        background-color: rgba(30, 58, 138, 0.35) !important;
+        border: 1px dashed #60A5FA !important;
+    }
+    [data-testid="stMetricValue"] {
+        font-size: 1.3rem !important;
+        white-space: normal !important;
+        word-break: break-word !important;
         overflow: visible !important;
     }
     [data-testid="stMetric"] {
         width: 100% !important;
+        background-color: #FFFFFF;
+        padding: 12px 16px;
+        border-radius: 10px;
+        border: 1px solid #CBD5E1;
+        box-shadow: 0 2px 6px rgba(15, 23, 42, 0.05);
     }
-    
-    /* Existing app styling */
-    .stTabs [data-baseweb="tab"] { background-color: #F1F5F9; border-radius: 4px; padding: 0 16px; margin-right: 4px;}
-    .stTabs [aria-selected="true"] { background-color: #1E3A8A !important; color: white !important; }
-    div[data-testid="stSidebar"] { background-color: #F8FAFC; border-right: 1px solid #E2E8F0; }
-    h1, h2, h3 { color: #0F172A; }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 6px;
+        background-color: #FFFFFF;
+        padding: 6px;
+        border-radius: 10px;
+        border: 1px solid #CBD5E1;
+    }
+    .stTabs [data-baseweb="tab"] {
+        background-color: #F8FAFC;
+        color: #334155;
+        border-radius: 7px;
+        padding: 6px 14px;
+        font-weight: 600;
+    }
+    .stTabs [aria-selected="true"] {
+        background: linear-gradient(135deg, #1E3A8A 0%, #0F172A 100%) !important;
+        color: #FFFFFF !important;
+    }
+    .exec-hero {
+        background: linear-gradient(135deg, #0F172A 0%, #1E3A8A 65%, #1D4ED8 100%);
+        color: #FFFFFF;
+        padding: 16px 22px;
+        border-radius: 12px;
+        margin-bottom: 18px;
+        border: 1px solid #3B82F6;
+        box-shadow: 0 6px 16px rgba(15, 23, 42, 0.14);
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+    }
+    h1, h2, h3 {
+        color: #0F172A;
+        letter-spacing: -0.01em;
+    }
     </style>
 """, unsafe_allow_html=True)
 
 DB_FILE = "freight_audit_ledger.db"
 
+
 def colored_metric(label, value, text_color="#1E3A8A"):
     st.markdown(f"""
-        <div style="background-color: #F8FAFC; padding: 14px 18px; border-radius: 8px; border: 1px solid #E2E8F0; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
-            <div style="color: #64748B; font-size: 0.85rem; font-weight: 600; text-transform: uppercase; margin-bottom: 6px;">{label}</div>
-            <div style="color: {text_color}; font-size: 1.6rem; font-weight: 800; line-height: 1.2;">{value}</div>
+        <div style="background-color: #FFFFFF; padding: 14px 18px; border-radius: 10px; border: 1px solid #CBD5E1; box-shadow: 0 2px 6px rgba(15, 23, 42, 0.05);">
+            <div style="color: #475569; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px;">{label}</div>
+            <div style="color: {text_color}; font-size: 1.45rem; font-weight: 800; line-height: 1.25; word-break: break-word;">{value}</div>
         </div>
     """, unsafe_allow_html=True)
+
 
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
+
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS audit_ledger (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
             invoice_no TEXT,
             carrier TEXT,
+            route_key TEXT,
             bol_ref TEXT,
             etims_cu_serial TEXT,
+            billed_total REAL,
+            approved_payable REAL,
             total_overcharge REAL,
             audit_status TEXT,
             etims_valid INTEGER,
             dispute_status TEXT DEFAULT 'PENDING'
         )
     """)
-    
+
+    cursor.execute("PRAGMA table_info(audit_ledger)")
+    existing_cols = {row[1] for row in cursor.fetchall()}
+    migrations = {
+        "route_key": "TEXT DEFAULT 'DEFAULT'",
+        "billed_total": "REAL DEFAULT 0.0",
+        "approved_payable": "REAL DEFAULT 0.0",
+    }
+    for col, col_def in migrations.items():
+        if col not in existing_cols:
+            cursor.execute(f"ALTER TABLE audit_ledger ADD COLUMN {col} {col_def}")
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
@@ -84,697 +166,70 @@ def init_db():
             role TEXT NOT NULL
         )
     """)
-    
+
     cursor.execute("SELECT COUNT(*) FROM users")
     if cursor.fetchone()[0] == 0:
         default_users = [
             ("admin", hash_password("admin123"), "admin@company.co.ke", "admin"),
             ("finance", hash_password("finance123"), "finance@company.co.ke", "finance"),
-            ("auditor", hash_password("auditor123"), "auditor@company.co.ke", "auditor")
+            ("auditor", hash_password("auditor123"), "auditor@company.co.ke", "auditor"),
         ]
         cursor.executemany("INSERT INTO users (username, password_hash, email, role) VALUES (?, ?, ?, ?)", default_users)
-        
+
     conn.commit()
     conn.close()
+
 
 init_db()
 
-def save_audit_record(df_results):
+
+def check_historical_duplicates(df_results: pd.DataFrame) -> pd.Series:
+    """Checks incoming invoices against persistent audit_ledger history."""
     conn = sqlite3.connect(DB_FILE)
-    cur = conn.cursor()
-    cur.execute("DELETE FROM audit_ledger")  # Refresh active session
-    
-    for _, row in df_results.iterrows():
-        cur.execute(
-            """
-            INSERT INTO audit_ledger (invoice_no, carrier, bol_ref, etims_cu_serial, total_overcharge, audit_status, etims_valid, dispute_status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING')
-        """,
-            (
-                str(row.get("Invoice_No", "N/A")),
-                str(row.get("Carrier", "Unknown")),
-                str(row.get("BoL_Ref", "N/A")),
-                str(row.get("eTIMS_CU_Serial", "N/A")),
-                float(row.get("Total_Overcharge", 0.0)),
-                str(row.get("Audit_Status", "UNVERIFIED")),
-                1 if row.get("eTIMS_Valid", True) else 0,
-            ),
-        )
-    conn.commit()
-    conn.close()
-
-def update_dispute_status(invoice_no, status):
-    conn = sqlite3.connect(DB_FILE)
-    conn.execute("UPDATE audit_ledger SET dispute_status = ? WHERE invoice_no = ?", (status, str(invoice_no)))
-    conn.commit()
-    conn.close()
-
-def reset_password(username, new_password):
-    conn = sqlite3.connect(DB_FILE)
-    cur = conn.cursor()
-    cur.execute("SELECT username FROM users WHERE username = ?", (username,))
-    if cur.fetchone():
-        cur.execute("UPDATE users SET password_hash = ? WHERE username = ?", (hash_password(new_password), username))
-        conn.commit()
-        conn.close()
-        return True
-    conn.close()
-    return False
-
-# ------------------------------------------------------------------------------
-# 2. AUTHENTICATION & FORGOT PASSWORD LOGIC
-# ------------------------------------------------------------------------------
-if "authenticated" not in st.session_state:
-    st.session_state["authenticated"] = False
-if "username" not in st.session_state:
-    st.session_state["username"] = ""
-if "role" not in st.session_state:
-    st.session_state["role"] = ""
-if "audit_data" not in st.session_state:
-    st.session_state["audit_data"] = pd.DataFrame()
-
-def verify_user(username, password):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT role FROM users WHERE username = ? AND password_hash = ?", (username, hash_password(password)))
-    result = cursor.fetchone()
-    conn.close()
-    return result[0] if result else None
-
-if not st.session_state["authenticated"]:
-    st.title("🔒 Enterprise Freight Audit Portal")
-    
-    auth_mode = st.radio("Choose Action:", ["Login", "Forgot Password"], horizontal=True)
-
-    if auth_mode == "Login":
-        with st.form("login_form"):
-            username_input = st.text_input("Username")
-            password_input = st.text_input("Password", type="password")
-            submit = st.form_submit_button("Login")
-            if submit:
-                user_role = verify_user(username_input, password_input)
-                if user_role:
-                    st.session_state.update({"authenticated": True, "username": username_input, "role": user_role})
-                    st.rerun()
-                else:
-                    st.error("Invalid username or password.")
-    else:
-        with st.form("reset_password_form"):
-            st.subheader("🔑 Reset Your Password")
-            reset_username = st.text_input("Username")
-            new_password = st.text_input("New Password", type="password")
-            confirm_password = st.text_input("Confirm New Password", type="password")
-            reset_submit = st.form_submit_button("Update Password")
-
-            if reset_submit:
-                if not reset_username or not new_password:
-                    st.error("All fields are required.")
-                elif new_password != confirm_password:
-                    st.error("Passwords do not match.")
-                else:
-                    if reset_password(reset_username, new_password):
-                        st.success("Password successfully updated! Please switch back to Login.")
-                    else:
-                        st.error("Username not found.")
-    st.stop()
-
-st.sidebar.write(f"Logged in as: **{st.session_state['username'].upper()}** | **{st.session_state['role'].upper()}**")
-if st.sidebar.button("Logout"):
-    st.session_state.update({"authenticated": False, "username": "", "role": ""})
-    st.rerun()
-
-# ------------------------------------------------------------------------------
-# 3. UNIVERSAL PDF & CSV PARSING ENGINE
-# ------------------------------------------------------------------------------
-def parse_pdf_invoice_universal(file_obj, usd_rate):
-    records = []
-    clean_fname = os.path.splitext(file_obj.name)[0]
-    
-    try:
-        with pdfplumber.open(file_obj) as pdf:
-            for page_num, page in enumerate(pdf.pages, start=1):
-                text = page.extract_text() or ""
-                
-                inv_match = re.search(
-                    r"(?:Invoice\s*(?:No|#|\.?)|Inv\s*#?|Doc\s*#?|Ref\s*#?)\s*[:.]?\s*([A-Za-z0-9-_]+)", 
-                    text, re.IGNORECASE
-                )
-                carrier_match = re.search(
-                    r"([A-Za-z0-9\s]+(?:Logistics|Transport|Express|Freight|Limited|Ltd|Group|Swara|Kefar|Siginon|Rift))", 
-                    text, re.IGNORECASE
-                )
-                bol_match = re.search(
-                    r"(?:BoL|Bill of Lading|Waybill)\s*Ref\s*:?\s*([A-Za-z0-9-]+)", 
-                    text, re.IGNORECASE
-                )
-                
-                etims_match = re.search(
-                    r"(KRA[A-Za-z0-9]{8,15}|CU[0-9]{8,12}|eTIMS[A-Za-z0-9-]+|KRA\d{11,14})", 
-                    text, re.IGNORECASE
-                )
-
-                fx_match = re.search(r"(?:FX|Rate|Exchange\s*Rate|USD/KES)\s*[:=]?\s*(\d{2,3}\.\d{2})", text, re.IGNORECASE)
-                billed_fx = float(fx_match.group(1)) if fx_match else usd_rate
-
-                raw_numbers = re.findall(r"[\d,]+\.\d{2}", text)
-                clean_amounts = [float(n.replace(",", "")) for n in raw_numbers if n.replace(",", "").replace(".", "").isdigit()]
-                billed_amount = max(clean_amounts) if clean_amounts else 0.0
-                
-                if inv_match and len(inv_match.group(1).strip()) > 1:
-                    invoice_id = inv_match.group(1).strip()
-                else:
-                    invoice_id = f"{clean_fname}_P{page_num}" if len(pdf.pages) > 1 else clean_fname
-
-                etims_serial = etims_match.group(1) if etims_match else "MISSING_ETIMS_CU"
-                is_etims_valid = etims_serial != "MISSING_ETIMS_CU"
-
-                records.append({
-                    "Invoice_No": invoice_id,
-                    "Carrier": carrier_match.group(1).strip() if carrier_match else "Swara Express",
-                    "BoL_Ref": bol_match.group(1) if bol_match else "N/A",
-                    "eTIMS_CU_Serial": etims_serial,
-                    "eTIMS_Valid": is_etims_valid,
-                    "Billed_FX_Rate": billed_fx,
-                    "Billed_Base": float(billed_amount),
-                })
-    except Exception as e:
-        st.sidebar.warning(f"Note: Extraction issue in {file_obj.name}: {str(e)}")
-
-    if not records:
-        records.append({
-            "Invoice_No": clean_fname,
-            "Carrier": "Carrier",
-            "BoL_Ref": "N/A",
-            "eTIMS_CU_Serial": "MISSING_ETIMS_CU",
-            "eTIMS_Valid": False,
-            "Billed_FX_Rate": usd_rate,
-            "Billed_Base": 0.0,
-        })
-        
-    return records
-
-def generate_pdf_debit_note(row_data):
-    buffer = BytesIO()
-    c = canvas.Canvas(buffer, pagesize=letter)
-    c.setFont("Helvetica-Bold", 18)
-    c.drawString(50, 750, "OFFICIAL DEBIT NOTE / AUDIT DISCREPANCY NOTICE")
-    c.setFont("Helvetica", 10)
-    c.drawString(50, 725, f"Carrier: {row_data.get('Carrier', 'N/A')}")
-    c.drawString(50, 710, f"Target Invoice No: {row_data.get('Invoice_No', 'N/A')}")
-    c.drawString(50, 695, f"BoL Reference: {row_data.get('BoL_Ref', 'N/A')}")
-    c.drawString(50, 680, f"eTIMS CU Serial: {row_data.get('eTIMS_CU_Serial', 'N/A')}")
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(50, 630, "Financial Variance Breakdown:")
-    c.setFont("Helvetica", 10)
-    c.drawString(70, 610, f"- Billed Base Rate: KES {row_data.get('Billed_Base', 0.0):,.2f}")
-    c.drawString(70, 595, f"- Contract Base Rate: KES {row_data.get('Contract_Base', 0.0):,.2f}")
-    c.drawString(70, 580, f"- FX Overcharge Premium: KES {row_data.get('FX_Overcharge', 0.0):,.2f}")
-    c.drawString(70, 565, f"- Total Claimed Debit Overcharge: KES {row_data.get('Total_Overcharge', 0.0):,.2f}")
-    c.showPage()
-    c.save()
-    buffer.seek(0)
-    return buffer
-
-def generate_batch_summary_pdf(df):
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=landscape(letter))
-    elements = []
-    styles = getSampleStyleSheet()
-    
-    elements.append(Paragraph(f"Executive Batch Audit Summary - {datetime.now().strftime('%Y-%m-%d')}", styles['Title']))
-    elements.append(Spacer(1, 12))
-    
-    data = [["Invoice No", "Carrier", "BoL Ref", "eTIMS Status", "Overcharge (KES)", "Status"]]
-    for _, row in df.iterrows():
-        etims_status = "VALID" if row.get("eTIMS_Valid", True) else "NON_COMPLIANT"
-        data.append([
-            str(row.get("Invoice_No", "N/A")), str(row.get("Carrier", "N/A")), str(row.get("BoL_Ref", "N/A")),
-            etims_status, f"{row.get('Total_Overcharge', 0.0):,.2f}", str(row.get("Audit_Status", "N/A"))
-        ])
-        
-    table = Table(data, colWidths=[100, 130, 90, 100, 110, 170])
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1E3A8A")),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-        ('BOTTOMPADDING', (0,0), (-1,0), 12),
-        ('BACKGROUND', (0,1), (-1,-1), colors.HexColor("#F8FAFC")),
-        ('GRID', (0,0), (-1,-1), 1, colors.black),
-    ]))
-    elements.append(table)
-    doc.build(elements)
-    buffer.seek(0)
-    return buffer
-
-# ------------------------------------------------------------------------------
-# 4. DASHBOARD INTERFACE & ACCURATE AUDIT ENGINE
-# ------------------------------------------------------------------------------
-st.title("🚛 Enterprise Freight Audit & Reconciliation")
-
-tabs = st.tabs([
-    "📋 Active Audit Engine",       # Index 0
-    "⛽ Fleet & Fuel Telematics",   # Index 1
-    "🌍 Cross-Border Audit",        # Index 2
-    "⚓ Port Demurrage Tool",       # Index 3
-    "📊 Carrier Scorecards",        # Index 4
-    "📜 Dispute Ledger",            # Index 5
-    "👤 User Profile"               # Index 6
-])
-
-with tabs[0]:
-    st.sidebar.header("⚙️ Global Audit Parameters")
-    usd_fx_rate = st.sidebar.number_input("CBK Benchmark FX Rate (USD to KES)", value=130.0, step=0.5)
-    variance_threshold = st.sidebar.slider("Overcharge Ignore Threshold (KES)", 0, 5000, 100)
-    
-    st.sidebar.header("📁 Upload Documents")
-    pdf_files = st.sidebar.file_uploader("1. Upload PDF Invoices", type=["pdf"], accept_multiple_files=True)
-    contract_file = st.sidebar.file_uploader("2. Upload Rate Card (CSV/Excel)", type=["csv", "xlsx"])
-
-    if pdf_files and contract_file:
-        invoice_records = []
-        for pdf in pdf_files:
-            invoice_records.extend(parse_pdf_invoice_universal(pdf, usd_fx_rate))
-
-        df_inv = pd.DataFrame(invoice_records)
-
-        df_rates = pd.read_csv(contract_file) if contract_file.name.endswith(".csv") else pd.read_excel(contract_file)
-        df_rates.columns = [str(c).strip() for c in df_rates.columns]
-
-        rate_col = None
-        for col in df_rates.columns:
-            if any(kw in col.lower() for kw in ["contract", "base", "rate", "price", "amount", "kes"]):
-                rate_col = col
-                break
-                
-        if not rate_col:
-            num_cols = df_rates.select_dtypes(include=[np.number]).columns
-            rate_col = num_cols[0] if len(num_cols) > 0 else df_rates.columns[-1]
-
-        df_rates[rate_col] = pd.to_numeric(
-            df_rates[rate_col].astype(str).str.replace(',', '').str.extract(r'([\d\.]+)')[0], 
-            errors='coerce'
-        ).fillna(0.0)
-
-        df_inv["Billed_Base"] = pd.to_numeric(
-            df_inv["Billed_Base"].astype(str).str.replace(',', '').str.extract(r'([\d\.]+)')[0], 
-            errors='coerce'
-        ).fillna(0.0)
-
-        contract_rates = df_rates[rate_col].values
-        total_inv_count = len(df_inv)
-        
-        if len(contract_rates) >= total_inv_count:
-            df_inv["Contract_Base"] = contract_rates[:total_inv_count]
-        else:
-            padded_rates = list(contract_rates) + [0.0] * (total_inv_count - len(contract_rates))
-            df_inv["Contract_Base"] = padded_rates[:total_inv_count]
-
-        df_merged = df_inv.copy()
-
-        fx_diff = np.maximum(0.0, df_merged["Billed_FX_Rate"] - usd_fx_rate)
-        df_merged["FX_Overcharge"] = (df_merged["Billed_Base"] / usd_fx_rate) * fx_diff
-
-        rate_diff = df_merged["Billed_Base"] - df_merged["Contract_Base"]
-        base_overcharge = np.where(rate_diff > variance_threshold, rate_diff, 0.0)
-
-        df_merged["Total_Overcharge"] = base_overcharge + df_merged["FX_Overcharge"]
-        
-        conditions = [
-            (~df_merged["eTIMS_Valid"]),
-            (df_merged["Total_Overcharge"] > 0)
-        ]
-        choices = ["FLAGGED_INVALID_ETIMS", "FLAGGED_RATE_OVERCHARGE"]
-        df_merged["Audit_Status"] = np.select(conditions, choices, default="PASSED_VERIFIED")
-
-        save_audit_record(df_merged)
-        st.session_state["audit_data"] = df_merged
-
-    df_active = st.session_state.get("audit_data", pd.DataFrame())
-
-    total_recovered = 0.0
-    total_leakage = 0.0
-    clean_count = 0
-    invalid_etims_count = 0
-
-    if not df_active.empty and "Total_Overcharge" in df_active.columns:
-        total_recovered = df_active['Total_Overcharge'].sum()
-        total_leakage = df_active['Total_Overcharge'].sum()
-        clean_count = len(df_active[df_active["Audit_Status"] == "PASSED_VERIFIED"])
-        invalid_etims_count = len(df_active[~df_active["eTIMS_Valid"]])
-
-    # Executive ROI / Financial Summary Banner
-    annualized_savings = total_recovered * 12
-    st.markdown(f"""
-        <div style="background-color: #1E3A8A; color: white; padding: 12px 20px; border-radius: 8px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
-            <div><strong>💼 Executive ROI Summary:</strong> Total Audit Value Processed: <strong>KES {total_recovered:,.2f}</strong></div>
-            <div>Estimated Annualized Fleet Savings: <strong style="color: #4ADE80;">KES {annualized_savings:,.2f}</strong></div>
-        </div>
-    """, unsafe_allow_html=True)
-
-    c1, c2, c3, c4, c5 = st.columns(5)
-    with c1:
-        colored_metric("Invoices", str(len(df_active)), text_color="#1E3A8A")
-    with c2:
-        colored_metric("Verified Clean", str(clean_count), text_color="#1E3A8A")
-    with c3:
-        colored_metric("Capital Saved", f"KES {total_recovered:,.2f}", text_color="#16A34A")
-    with c4:
-        colored_metric("Money Lost / Leakage", f"KES {total_leakage:,.2f}", text_color="#DC2626")
-    with c5:
-        colored_metric("Bad eTIMS", str(invalid_etims_count), text_color="#DC2626")
-
-    st.markdown("---")
-    
-    # Interactive Methodology Explainer for CFO / Evaluators
-    with st.expander("🔍 Click to View Forensic Calculation Methodology & Formula Breakdown"):
-        st.markdown("""
-        ### **How Capital Saved & Money Lost Are Calculated:**
-        * **1. Freight Charge Variance Formula:**
-          $$\\text{Freight Overcharge} = \\text{Billed Freight Amount} - \\text{Contracted Base Rate}$$
-          * If variance exceeds the ignore threshold (e.g., KES 100), it is flagged as leakage.
-        * **2. FX Overcharge Premium Formula:**
-          $$\\text{FX Overcharge} = \\left(\\frac{\\text{Billed Base}}{\\text{CBK Benchmark FX}}\\right) \\times \\max(0, \\text{Carrier FX} - \\text{Benchmark FX})$$
-        * **3. Total Capital Saved / Leakage:**
-          $$\\text{Total Overcharge} = \\text{Freight Overcharge} + \\text{FX Overcharge}$$
-        """)
-
-    c_left, c_right = st.columns([3, 1])
-    with c_left:
-        st.subheader("📋 Audit Extraction Results")
-    with c_right:
-        st.download_button("📥 Executive PDF Report", generate_batch_summary_pdf(df_active), "Batch_Summary.pdf", "application/pdf")
-        
-    st.dataframe(
-        df_active[["Invoice_No", "Carrier", "Billed_Base", "Contract_Base", "Billed_FX_Rate", "eTIMS_CU_Serial", "Total_Overcharge", "Audit_Status"]] if not df_active.empty else pd.DataFrame(), 
-        use_container_width=True
+    hist_df = pd.read_sql_query(
+        "SELECT invoice_no, bol_ref, etims_cu_serial, billed_total FROM audit_ledger",
+        conn,
     )
-
-    if not df_active.empty:
-        flagged = df_active[df_active["Audit_Status"] != "PASSED_VERIFIED"].copy()
-        
-        valid_flagged_options = [
-            str(inv).strip() for inv in flagged["Invoice_No"].unique() 
-            if str(inv).strip() not in ["", "-", "None", "nan", "N/A"]
-        ]
-
-        if valid_flagged_options:
-            st.subheader("✉️ Action Center")
-            selected_inv = st.selectbox("Select Invoice:", valid_flagged_options)
-            
-            matched_rows = flagged[flagged["Invoice_No"].astype(str) == selected_inv]
-            row = matched_rows.iloc[0] if not matched_rows.empty else flagged.iloc[0]
-
-            email_subject = f"DISPUTE NOTICE: Invoice Discrepancy #{selected_inv} - {row['Carrier']}"
-            email_body = f"""Dear Accounts Receivable Team ({row['Carrier']}),
-
-We are formally disputing charges on Invoice #{selected_inv} (BoL Ref: {row['BoL_Ref']}).
-
-Audit Variance Breakdown:
-------------------------------------------
-- Billed Amount: KES {row['Billed_Base']:,.2f}
-- Contract Base Rate: KES {row['Contract_Base']:,.2f}
-- FX Rate Applied: {row['Billed_FX_Rate']} (Benchmark: {usd_fx_rate})
-- eTIMS CU Status: {row['eTIMS_CU_Serial']}
-- Total Claimed Debit Overcharge: KES {row['Total_Overcharge']:,.2f}
-
-Please issue a credit note for KES {row['Total_Overcharge']:,.2f} at your earliest convenience.
-
-Best regards,
-Freight Audit Team
-{st.session_state['username'].title()} ({st.session_state['role'].upper()})
-"""
-
-            whatsapp_text = f"Hello {row['Carrier']} Team. Re: Invoice #{selected_inv} (BoL: {row['BoL_Ref']}). Our audit flagged a variance of KES {row['Total_Overcharge']:,.2f}. Please review the formal debit note sent to your email."
-            whatsapp_url = f"https://wa.me/?text={urllib.parse.quote(whatsapp_text)}"
-
-            with st.expander("✉️ Preview Dispute Message & Dispatch Options", expanded=True):
-                st.text_input("Subject:", value=email_subject, disabled=True)
-                st.text_area("Message Body:", value=email_body, height=180)
-                st.markdown(f"[📲 Send Dispute Summary via WhatsApp]({whatsapp_url})", unsafe_allow_html=True)
-
-            c_btn1, c_btn2 = st.columns(2)
-            with c_btn1:
-                st.download_button("📑 Download Debit Note (PDF)", generate_pdf_debit_note(row), f"Debit_Note_{selected_inv}.pdf")
-
-            if st.session_state["role"] in ["admin", "finance"]:
-                if st.button("🚀 Dispatch Dispute Email"):
-                    update_dispute_status(selected_inv, 'DISPUTE_SENT')
-                    st.success(f"Dispute logged and email dispatched for Invoice {selected_inv}!")
-        else:
-            st.info("No flagged invoices requiring dispute dispatching.")
-    else:
-        st.info("Upload PDF Invoices and Rate Cards in the sidebar to view audit extraction results.")
-
-# ⛽ FLEET & FUEL TELEMATICS MONITOR (TRUFOODS COMPLIANCE MODULE)
-with tabs[1]:
-    st.header("⛽ Real-Time Fleet & Fuel Telematics Monitor")
-    st.info("Automated monitoring for fuel pilferage, route deviations, excessive idling, and maintenance alerts.")
-    
-    col_a, col_b, col_c = st.columns(3)
-    fuel_price = col_a.number_input("Fuel Cost Rate (KES / Liter)", value=210.0, step=5.0)
-    idle_fuel_rate = col_b.number_input("Idle Burn Rate (Liters / Hour)", value=2.5, step=0.5)
-    max_idle_threshold = col_c.slider("Max Allowed Idle Time (Hours)", 0.5, 5.0, 2.0)
-
-    st.markdown("---")
-
-    telematics_file = st.file_uploader("Upload Telematics/GPS Log (.csv, .xlsx)", type=["csv", "xlsx"], key="telematics_upload")
-    
-    df_tele = pd.DataFrame()
-    if telematics_file:
-        try:
-            if telematics_file.name.endswith('.csv'):
-                df_tele = pd.read_csv(telematics_file)
-            else:
-                df_tele = pd.read_excel(telematics_file)
-            st.success("Telematics log parsed successfully!")
-        except Exception as e:
-            st.error(f"Error parsing log: {str(e)}")
-            df_tele = pd.DataFrame()
-
-    if not df_tele.empty:
-        siphoning_df = df_tele[df_tele['Fuel_Drop_Liters'] > 10.0] if 'Fuel_Drop_Liters' in df_tele.columns else pd.DataFrame()
-        idling_df = df_tele[df_tele['Idle_Hours'] > max_idle_threshold] if 'Idle_Hours' in df_tele.columns else pd.DataFrame()
-        route_dev_df = df_tele[df_tele['Actual_KM'] > (df_tele['Planned_KM'] * 1.10)] if 'Actual_KM' in df_tele.columns and 'Planned_KM' in df_tele.columns else pd.DataFrame()
-        maintenance_df = df_tele[df_tele['Weekly_Total_KM'] > 1200] if 'Weekly_Total_KM' in df_tele.columns else pd.DataFrame()
-
-        total_fuel_lost_liters = (siphoning_df['Fuel_Drop_Liters'].sum() if not siphoning_df.empty else 0.0) + \
-                                 ((idling_df['Idle_Hours'].sum() if not idling_df.empty else 0.0) * idle_fuel_rate)
-        total_cash_loss_kes = total_fuel_lost_liters * fuel_price
-
-        m1, m2, m3, m4 = st.columns(4)
-        with m1:
-            colored_metric("🚨 Siphoning Incidents", str(len(siphoning_df)), text_color="#DC2626")
-        with m2:
-            colored_metric("⏱️ Excessive Idling", str(len(idling_df)), text_color="#D97706")
-        with m3:
-            colored_metric("🛣️ Route Deviations", str(len(route_dev_df)), text_color="#D97706")
-        with m4:
-            colored_metric("💰 Est. Cash Leakage", f"KES {total_cash_loss_kes:,.2f}", text_color="#DC2626")
-
-        st.markdown("---")
-
-        with st.expander("🔍 Click to View Telematics Cash Leakage Formula Breakdown"):
-            sip_sum = siphoning_df['Fuel_Drop_Liters'].sum() if not siphoning_df.empty else 0.0
-            idle_sum = idling_df['Idle_Hours'].sum() if not idling_df.empty else 0.0
-            st.markdown(f"""
-            ### **How Fuel Siphoning & Idling Losses Are Calculated:**
-            * **Input Parameters:** Fuel Cost = KES {fuel_price:.2f}/L | Idle Burn Rate = {idle_fuel_rate} L/hr
-            * **Step A: Siphoning Loss**
-              * Total Siphoned Volume = **{sip_sum:.1f} Liters**
-              * Siphoning Cash Loss = $\\text{{Volume}} \\times \\text{{Fuel Price}} = \\mathbf{{\\text{{KES }} {sip_sum * fuel_price:,.2f}}}$
-            * **Step B: Excessive Idling Loss**
-              * Total Excess Idle Hours = **{idle_sum:.1f} Hours**
-              * Fuel Consumed = $\\text{{Hours}} \\times \\text{{Burn Rate}} = {(idle_sum * idle_fuel_rate):.2f}\\text{{ Liters}}$
-              * Idling Cash Loss = $\\text{{Fuel}} \\times \\text{{Fuel Price}} = \\mathbf{{\\text{{KES }} {(idle_sum * idle_fuel_rate * fuel_price):,.2f}}}$
-            """)
-
-        col_left, col_right = st.columns(2)
-
-        with col_left:
-            st.subheader("📊 Fuel Siphoning & Pilferage Alerts")
-            if not siphoning_df.empty:
-                fig_fuel = px.bar(
-                    siphoning_df, 
-                    x="Truck_ID", 
-                    y="Fuel_Drop_Liters", 
-                    color="Driver",
-                    title="Suspected Siphoning Vol (Liters)",
-                    color_discrete_sequence=px.colors.qualitative.Plotly
-                )
-                st.plotly_chart(fig_fuel, use_container_width=True)
-            else:
-                st.success("No fuel siphoning anomalies detected.")
-
-        with col_right:
-            st.subheader("🛣️ Route Distance Drift vs Planned")
-            if 'Planned_KM' in df_tele.columns and 'Actual_KM' in df_tele.columns:
-                fig_route = px.scatter(
-                    df_tele, 
-                    x="Planned_KM", 
-                    y="Actual_KM", 
-                    color="Geofence_Breach" if "Geofence_Breach" in df_tele.columns else None,
-                    size="Idle_Hours" if "Idle_Hours" in df_tele.columns else None,
-                    hover_data=["Truck_ID", "Driver"] if "Truck_ID" in df_tele.columns else None,
-                    title="Planned vs Actual Distance"
-                )
-                st.plotly_chart(fig_route, use_container_width=True)
-            else:
-                st.info("Missing Planned_KM or Actual_KM columns for route scatter plot.")
-
-        if not maintenance_df.empty:
-            st.subheader("🛠️ Preventive Maintenance & Exception Escalations")
-            for idx, row in maintenance_df.iterrows():
-                st.warning(
-                    f"⚠️ **Vehicle High Wear Alert ({row.get('Truck_ID', 'N/A')})**: Driven {row.get('Weekly_Total_KM', 0)} KM this week with {row.get('Idle_Hours', 0)} hrs idling. "
-                    f"Assigned Driver: **{row.get('Driver', 'N/A')}**. Recommended for preventive service check."
-                )
-
-        st.subheader("📋 Ingested Telematics Exception Ledger")
-        st.dataframe(df_tele, use_container_width=True)
-
-        csv_data = df_tele.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📥 Download Logistics Exception Report (CSV)",
-            data=csv_data,
-            file_name="Trufoods_Fleet_Exception_Report.csv",
-            mime="text/csv"
-        )
-    else:
-        m1, m2, m3, m4 = st.columns(4)
-        with m1:
-            colored_metric("🚨 Siphoning Incidents", "0", text_color="#DC2626")
-        with m2:
-            colored_metric("⏱️ Excessive Idling", "0", text_color="#D97706")
-        with m3:
-            colored_metric("🛣️ Route Deviations", "0", text_color="#D97706")
-        with m4:
-            colored_metric("💰 Est. Cash Leakage", "KES 0.00", text_color="#DC2626")
-        st.markdown("---")
-        st.info("👆 Please upload a Telematics/GPS Log (.csv or .xlsx) above to activate fleet tracking and view fuel leakages.")
-
-# CROSS-BORDER AUDIT TAB
-with tabs[2]:
-    st.subheader("🌍 East & Southern Africa Cross-Border Freight Audit")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        corridor = st.selectbox("Select Transport Corridor", [
-            "Northern Corridor (Mombasa - Kampala - Kigali)",
-            "Central Corridor (Dar es Salaam - Mutukula - Kigali/Bujumbura)",
-            "North-South Corridor (Tanzania/Kenya - Tunduma/Nakonde - Zambia)"
-        ])
-        origin_country = st.selectbox("Origin Country", ["Kenya (KRA)", "Tanzania (TRA)", "Uganda (URA)", "Zambia (ZRA)"])
-        
-    with col2:
-        billed_currency = st.selectbox("Invoice Currency", ["USD", "KES", "UGX", "TZS", "ZMW"])
-        billed_amount = st.number_input("Billed Total Amount", value=5000.0)
-        carrier_fx = st.number_input("Carrier FX Conversion Rate Applied", value=138.50)
-        
-    with col3:
-        cb_rates = {"USD": 1.0, "KES": 129.50, "UGX": 3680.00, "TZS": 2650.00, "ZMW": 26.50}
-        benchmark_fx = cb_rates.get(billed_currency, 1.0)
-        st.metric("Official Benchmark Rate", f"{benchmark_fx} {billed_currency}/USD")
-        
-        border_delay_days = st.number_input("Border Processing Delay (Days)", min_value=0, value=3)
-
-    tax_system_map = {
-        "Kenya (KRA)": "eTIMS CU Serial Number",
-        "Uganda (URA)": "EFRIS Invoice Number / QR",
-        "Tanzania (TRA)": "EFD / VFD Receipt Verification",
-        "Zambia (ZRA)": "Smart Invoice Mark / Clearance Code"
-    }
-    
-    st.markdown("---")
-    st.markdown(f"**Required Tax Compliance Check:** `{tax_system_map[origin_country]}`")
-
-    if billed_currency != "USD":
-        expected_base_in_usd = billed_amount / benchmark_fx
-        billed_in_usd = billed_amount / carrier_fx
-        fx_discrepancy_usd = max(0.0, billed_in_usd - expected_base_in_usd)
-    else:
-        fx_discrepancy_usd = 0.0
-
-    chargeable_border_days = max(0, border_delay_days - 1)
-    border_demurrage_claim_usd = chargeable_border_days * 150.0
-
-    total_cross_border_claim_usd = fx_discrepancy_usd + border_demurrage_claim_usd
-
-    m1, m2, m3 = st.columns(3)
-    m1.metric("FX Arbitrage Claim", f"USD {fx_discrepancy_usd:,.2f}")
-    m2.metric("Border Demurrage Variance", f"USD {border_demurrage_claim_usd:,.2f}")
-    m3.metric("Total Cross-Border Claim", f"USD {total_cross_border_claim_usd:,.2f}")
-
-    if total_cross_border_claim_usd > 0:
-        st.warning(f"⚠️ Cross-border billing variance detected: Total Claim USD {total_cross_border_claim_usd:,.2f}")
-
-# MOMBASA PORT & ICD DEMURRAGE CALCULATOR TAB
-with tabs[3]:
-    st.subheader("⚓ Mombasa Port & ICD Demurrage Auditor")
-    st.write("Calculate free-period allowances and audit container detention charges.")
-
-    col_d1, col_d2 = st.columns(2)
-    with col_d1:
-        shipment_type = st.selectbox("Shipment Destination Type", ["Local Import (7 Free Days)", "Transit Cargo (14 Free Days)"])
-        gate_out_date = st.date_input("Discharge Date at Port", value=datetime.today() - timedelta(days=12))
-        return_date = st.date_input("Empty Container Return Date", value=datetime.today())
-        container_count = st.number_input("Number of Containers", min_value=1, value=2)
-
-    with col_d2:
-        daily_demurrage_usd = st.number_input("Daily Demurrage Rate per Container (USD)", value=40.0)
-        billed_demurrage_kes = st.number_input("Demurrage Amount Billed by Carrier (KES)", value=65000.0)
-
-    free_days = 7 if "Local" in shipment_type else 14
-    total_days = (return_date - gate_out_date).days
-    chargeable_days = max(0, total_days - free_days)
-    
-    expected_demurrage_usd = chargeable_days * daily_demurrage_usd * container_count
-    expected_demurrage_kes = expected_demurrage_usd * usd_fx_rate
-    demurrage_overcharge = max(0.0, billed_demurrage_kes - expected_demurrage_kes)
-
-    st.markdown("---")
-    res_c1, res_c2, res_c3 = st.columns(3)
-    res_c1.metric("Days Port-to-Return", f"{total_days} Days")
-    res_c2.metric("Chargeable Days", f"{chargeable_days} Days (Free: {free_days})")
-    res_c3.metric("Demurrage Overcharge Claim", f"KES {demurrage_overcharge:,.2f}")
-
-    if demurrage_overcharge > 0:
-        st.error(f"⚠️ Flagged Demurrage Overcharge: Carrier overbilled by KES {demurrage_overcharge:,.2f}.")
-
-# CARRIER SCORECARDS & MULTI-CARRIER LEADERBOARD TAB
-with tabs[4]:
-    st.subheader("📊 Multi-Carrier Comparison & Overcharge Leaderboard")
-    st.info("Identify which transport agencies accumulate the highest financial overcharges and leakage.")
-    
-    df_active = st.session_state.get("audit_data", pd.DataFrame())
-    if not df_active.empty and "Carrier" in df_active.columns and "Total_Overcharge" in df_active.columns:
-        summary_df = df_active.groupby("Carrier")["Total_Overcharge"].sum().reset_index().sort_values(by="Total_Overcharge", ascending=False)
-        
-        fig = px.bar(
-            summary_df, 
-            x="Carrier", 
-            y="Total_Overcharge", 
-            title="Total Financial Overcharges by Carrier (KES)", 
-            color="Carrier", 
-            text_auto=',.2f',
-            color_discrete_sequence=px.colors.qualitative.Bold
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        
-        st.dataframe(summary_df, use_container_width=True)
-    else:
-        st.info("No audit data available yet to generate carrier scorecards. Upload invoices on Tab 0 first.")
-
-with tabs[5]:
-    st.subheader("📜 Audit Trail & Dispute History")
-    conn = sqlite3.connect(DB_FILE)
-    df_ledger = pd.read_sql_query("SELECT timestamp, invoice_no, carrier, total_overcharge, audit_status, dispute_status FROM audit_ledger ORDER BY timestamp DESC", conn)
     conn.close()
-    if not df_ledger.empty:
-        st.dataframe(df_ledger, use_container_width=True)
-    else:
-        st.info("No records found in audit ledger.")
 
-with tabs[6]:
-    st.subheader("👤 User Profile")
-    st.write(f"Logged in user: **{st.session_state['username']}** | Role: **{st.session_state['role']}**")
+    seen_invoices = set()
+    seen_bols = set()
+    seen_etims_amounts = set()
+
+    if not hist_df.empty:
+        seen_invoices.update(hist_df["invoice_no"].dropna().astype(str).str.strip().str.upper())
+        for b in hist_df["bol_ref"].dropna().astype(str).str.strip().str.upper():
+            if b not in ("", "N/A", "NONE", "NAN"):
+                seen_bols.add(b)
+        for _, hrow in hist_df.iterrows():
+            serial = str(hrow.get("etims_cu_serial", "")).strip().upper()
+            amt = round(float(hrow.get("billed_total") or 0.0), 2)
+            if serial and serial not in ("MISSING_ETIMS_CU", "N/A", "NONE", "NAN"):
+                seen_etims_amounts.add((serial, amt))
+
+    dup_flags = []
+    batch_invoices = set()
+    batch_bols = set()
+    batch_etims_amounts = set()
+
+    for _, row in df_results.iterrows():
+        inv = str(row.get("Invoice_No", "")).strip().upper()
+        bol = str(row.get("BoL_Ref", "")).strip().upper()
+        serial = str(row.get("eTIMS_CU_Serial", "")).strip().upper()
+        amt = round(float(row.get("Billed_Total", row.get("Billed_Base", 0.0)) or 0.0), 2)
+
+        is_dup = False
+        if inv and inv not in ("N/A", "NONE", "NAN") and (inv in seen_invoices or inv in batch_invoices):
+            is_dup = True
+        if bol and bol not in ("", "N/A", "NONE", "NAN") and (bol in seen_bols or bol in batch_bols):
+            is_dup = True
+        if serial and serial not in ("MISSING_ETIMS_CU", "N/A", "NONE", "NAN"):
+            if (serial, amt) in seen_etims_amounts or (serial, amt) in batch_etims_amounts:
+                is_dup = True
+
+        dup_flags.append(is_dup)
+        if inv and inv not in ("N/A", "NONE", "NAN"):
+            batch_invoices.add(inv)
+        if bol and bol not in ("", "N/A", "NONE", "NAN"):
+            batch_bols.add(bol)
+        if serial and serial not in
