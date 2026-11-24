@@ -746,7 +746,7 @@ def match_contract_tariff(df_inv: pd.DataFrame, df_rates: pd.DataFrame) -> pd.Da
         if not matched_r.empty:
                 candidates = matched_r
 
-          if tonnage_col and inv_ton > 0:
+            if tonnage_col and inv_ton > 0:
             matched_t = candidates[np.isclose(candidates[tonnage_col], inv_ton, atol=1.0)]
             if not matched_t.empty:
                 candidates = matched_t
