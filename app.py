@@ -19,64 +19,97 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 
 # ------------------------------------------------------------------------------
-# 1. PAGE CONFIGURATION & EXECUTIVE UI STYLING
+# ------------------------------------------------------------------------------
+# 1. PAGE CONFIGURATION & EXECUTIVE DARK UI STYLING
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="Enterprise Freight Audit & Telematics", layout="wide")
 
 st.markdown("""
     <style>
-    /* Executive Slate & Navy Background Theme */
+    /* Deep Obsidian & Midnight Slate Background Theme */
     .stApp {
-        background: linear-gradient(135deg, #F1F5F9 0%, #E2E8F0 50%, #F8FAFC 100%);
-        color: #0F172A;
+        background: linear-gradient(135deg, #090D16 0%, #0F172A 50%, #111827 100%);
+        color: #F8FAFC;
     }
 
-    /* Sidebar Executive Navy Gradient */
+    /* Top Header Bar Transparency */
+    header[data-testid="stHeader"] {
+        background-color: rgba(9, 13, 22, 0.85) !important;
+        border-bottom: 1px solid #1E293B;
+    }
+
+    /* Sidebar Deep Carbon Gradient */
     section[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #0F172A 0%, #1E293B 100%) !important;
-        border-right: 1px solid #334155;
+        background: linear-gradient(180deg, #060911 0%, #0F172A 100%) !important;
+        border-right: 1px solid #1E293B;
     }
     section[data-testid="stSidebar"] * {
-        color: #F8FAFC !important;
+        color: #E2E8F0 !important;
     }
     section[data-testid="stSidebar"] input,
     section[data-testid="stSidebar"] select,
-    section[data-testid="stSidebar"] [data-baseweb="select"] * {
-        color: #0F172A !important;
+    section[data-testid="stSidebar"] [data-baseweb="select"] > div {
+        background-color: #1E293B !important;
+        color: #F8FAFC !important;
+        border: 1px solid #334155 !important;
     }
     section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] {
-        background-color: rgba(255, 255, 255, 0.08) !important;
-        border: 1px dashed #64748B !important;
+        background-color: rgba(30, 41, 59, 0.6) !important;
+        border: 1px dashed #475569 !important;
     }
     section[data-testid="stSidebar"] button {
-        background-color: #2563EB !important;
+        background: linear-gradient(90deg, #1D4ED8 0%, #2563EB 100%) !important;
         color: #FFFFFF !important;
-        border: none !important;
+        border: 1px solid #3B82F6 !important;
     }
 
-    /* Force full metric display and prevent ellipsis truncation */
+    /* Main Content Inputs, Selectboxes, Textareas & Expanders */
+    .stTextInput input, .stNumberInput input, .stTextArea textarea, .stDateInput input {
+        background-color: #1E293B !important;
+        color: #F8FAFC !important;
+        border: 1px solid #334155 !important;
+    }
+    [data-baseweb="select"] > div {
+        background-color: #1E293B !important;
+        color: #F8FAFC !important;
+        border: 1px solid #334155 !important;
+    }
+    [data-testid="stExpander"] {
+        background-color: #111827 !important;
+        border: 1px solid #1E293B !important;
+        border-radius: 10px !important;
+    }
+    [data-testid="stExpander"] summary, [data-testid="stExpander"] * {
+        color: #E2E8F0 !important;
+    }
+
+    /* Dark Mode Native Metrics */
     [data-testid="stMetricValue"] {
         font-size: 1.3rem !important;
+        color: #F8FAFC !important;
         white-space: normal !important;
         word-break: break-word !important;
         overflow: visible !important;
     }
+    [data-testid="stMetricLabel"] {
+        color: #94A3B8 !important;
+    }
     [data-testid="stMetric"] {
         width: 100% !important;
-        background-color: #FFFFFF;
-        padding: 12px;
+        background: linear-gradient(180deg, #1E293B 0%, #111827 100%);
+        padding: 14px;
         border-radius: 10px;
-        border: 1px solid #CBD5E1;
-        box-shadow: 0 2px 6px rgba(15, 23, 42, 0.05);
+        border: 1px solid #334155;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
     }
 
-    /* Styled Navigation Tabs */
+    /* Styled Dark Navigation Tabs */
     .stTabs [data-baseweb="tab-list"] {
-        background-color: #FFFFFF;
+        background-color: #111827;
         padding: 6px;
         border-radius: 10px;
-        border: 1px solid #CBD5E1;
-        box-shadow: 0 2px 6px rgba(15, 23, 42, 0.04);
+        border: 1px solid #1E293B;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
     }
     .stTabs [data-baseweb="tab"] {
         background-color: transparent;
@@ -84,16 +117,39 @@ st.markdown("""
         padding: 8px 16px;
         margin-right: 4px;
         font-weight: 600;
-        color: #334155;
+        color: #94A3B8;
+    }
+    .stTabs [data-baseweb="tab"]:hover {
+        color: #F8FAFC;
+        background-color: rgba(51, 65, 85, 0.4);
     }
     .stTabs [aria-selected="true"] {
         background: linear-gradient(90deg, #1E3A8A 0%, #2563EB 100%) !important;
         color: #FFFFFF !important;
     }
 
+    /* Typography & Dividers */
+    h1, h2, h3, p, label, .stMarkdown {
+        color: #F1F5F9;
+    }
     h1, h2, h3 {
-        color: #0F172A;
         font-weight: 800;
+    }
+    hr {
+        border-color: #1E293B !important;
+    }
+
+    /* Action & Download Buttons */
+    .stDownloadButton button, .stButton button {
+        background-color: #1E293B !important;
+        color: #F8FAFC !important;
+        border: 1px solid #3B82F6 !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+    }
+    .stDownloadButton button:hover, .stButton button:hover {
+        background-color: #2563EB !important;
+        color: #FFFFFF !important;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -101,12 +157,22 @@ st.markdown("""
 DB_FILE = "freight_audit_ledger.db"
 
 
-def colored_metric(label, value, text_color="#1E3A8A", subtitle=""):
-    sub_html = f'<div style="color: #64748B; font-size: 0.75rem; margin-top: 4px;">{subtitle}</div>' if subtitle else ""
+def colored_metric(label, value, text_color="#38BDF8", subtitle=""):
+    # Automatically brighten deep light-mode colors so they pop on dark slate cards
+    dark_mode_color_map = {
+        "#1E3A8A": "#60A5FA",  # Luminous Royal Blue
+        "#0284C7": "#38BDF8",  # Bright Cyan
+        "#16A34A": "#4ADE80",  # Emerald Green
+        "#334155": "#E2E8F0",  # Crisp Silver Slate
+        "#DC2626": "#F87171",  # Coral Red
+        "#D97706": "#FBBF24",  # Warm Amber
+    }
+    display_color = dark_mode_color_map.get(text_color.upper(), text_color)
+    sub_html = f'<div style="color: #94A3B8; font-size: 0.75rem; margin-top: 4px;">{subtitle}</div>' if subtitle else ""
     st.markdown(f"""
-        <div style="background: linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%); padding: 16px 18px; border-radius: 10px; border: 1px solid #CBD5E1; border-top: 4px solid {text_color}; box-shadow: 0 4px 10px rgba(15, 23, 42, 0.06);">
-            <div style="color: #475569; font-size: 0.80rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px;">{label}</div>
-            <div style="color: {text_color}; font-size: 1.45rem; font-weight: 800; line-height: 1.2;">{value}</div>
+        <div style="background: linear-gradient(180deg, #1E293B 0%, #0F172A 100%); padding: 16px 18px; border-radius: 10px; border: 1px solid #334155; border-top: 4px solid {display_color}; box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);">
+            <div style="color: #94A3B8; font-size: 0.80rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">{label}</div>
+            <div style="color: {display_color}; font-size: 1.45rem; font-weight: 800; line-height: 1.2;">{value}</div>
             {sub_html}
         </div>
     """, unsafe_allow_html=True)
