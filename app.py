@@ -445,7 +445,7 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
                         block,
                         re.IGNORECASE,
                     )
-                      etims_match = re.search(
+                    etims_match = re.search(
                         r"(?:eTIMS\s*(?:CU)?\s*(?:Serial|No)?\s*[:#-]?\s*)?(\b(?:KRA|CU|eTIMS)[A-Za-z0-9-]{6,25}\b|\b(?:MISSING|INVALID)[A-Za-z0-9_-]*\b)",
                         block,
                         re.IGNORECASE,
