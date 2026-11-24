@@ -445,8 +445,8 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
                         block,
                         re.IGNORECASE,
                     )
-                    etims_match = re.search(
-                        r" (KRA[A-Za-z0-9]{8,15}|CU[0-9]{8,12}|eTIMS[A-Za-z0-9-]+|INVALID-[A-Za-z0-9-]+|MISSING-SERIAL) ",
+                      etims_match = re.search(
+                        r"(?:eTIMS\s*(?:CU)?\s*(?:Serial|No)?\s*[:#-]?\s*)?(\b(?:KRA|CU|eTIMS)[A-Za-z0-9-]{6,25}\b|\b(?:MISSING|INVALID)[A-Za-z0-9_-]*\b)",
                         block,
                         re.IGNORECASE,
                     )
@@ -456,10 +456,11 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
                         re.IGNORECASE,
                     )
                     route_match = re.search(
-                        r"(?:Route|Corridor|Lane)\s*[:=]?\s*([A-Za-z0-9\s\-–>]+)",
+                        r"(?:Route|Corridor|Lane)\s*[:=]?\s*([A-Za-z0-9 \-–>]+)",
                         block,
                         re.IGNORECASE,
                     )
+
                     truck_match = re.search(
                         r"(?:Truck|Plate|Reg|Vehicle)\s*(?:No|ID|#)?\s*[:=]?\s*([A-Z]{2,3}\s?\d{3}[A-Z]?|TRK-\d+)",
                         block,
@@ -516,11 +517,14 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
                         else f"{clean_fname}{suffix}"
                     )
 
-                    etims_serial = etims_match.group(1).strip() if etims_match else "MISSING_ETIMS_CU"
-                    is_etims_valid = not (
-                        etims_serial.upper().startswith("MISSING")
-                        or etims_serial.upper().startswith("INVALID")
+                      etims_serial = etims_match.group(1).strip() if etims_match else "MISSING_ETIMS_CU"
+                    etims_upper = etims_serial.upper()
+                    is_etims_valid = bool(etims_serial) and not (
+                        "MISSING" in etims_upper
+                        or "INVALID" in etims_upper
+                        or etims_upper in {"N/A", "NONE", "PENDING"}
                     )
+
 
                     records.append({
                         "Invoice_No": invoice_id,
@@ -713,10 +717,14 @@ def match_contract_tariff(df_inv: pd.DataFrame, df_rates: pd.DataFrame) -> pd.Da
 
     contract_bases, max_fuels, max_offloads = [], [], []
 
+    def _norm_route(val: str) -> str:
+        return re.sub(r"\s+", " ", str(val).replace("–", "-").replace("—", "-").lower()).strip()
+
     for _, inv in df_inv.iterrows():
         inv_carrier = str(inv.get("Carrier", "")).lower().strip()
-        inv_route = str(inv.get("Route", "")).lower().strip()
+        inv_route = _norm_route(inv.get("Route", ""))
         inv_ton = float(inv.get("Vehicle_Tonnage", 0.0))
+
 
         candidates = df_rates.copy()
         if carrier_col and inv_carrier and inv_carrier != "unknown carrier":
@@ -728,12 +736,13 @@ def match_contract_tariff(df_inv: pd.DataFrame, df_rates: pd.DataFrame) -> pd.Da
             if not matched_c.empty:
                 candidates = matched_c
 
-        if route_col and inv_route and inv_route != "n/a":
+             if route_col and inv_route and inv_route != "n/a":
             matched_r = candidates[
-                candidates[route_col].astype(str).str.lower().str.strip().apply(
-                    lambda rr: bool(rr) and (rr in inv_route or inv_route in rr)
+                candidates[route_col].astype(str).apply(_norm_route).apply(
+                    lambda rr: bool(rr) and (rr == inv_route or rr in inv_route or inv_route in rr)
                 )
             ]
+
             if not matched_r.empty:
                 candidates = matched_r
 
@@ -967,7 +976,8 @@ with tabs[0]:
     st.markdown("---")
 
     with st.expander("🔍 Click to View Forensic Calculation Methodology & Line-Item Formula Breakdown"):
-        st.markdown("""
+        st.markdown(r"""
+
         ### **How Line-Item Overcharges & Net Payable Are Calculated:**
         * **1. Line-Item Discrepancy (Subtotal):**
           $$\text{Subtotal Overcharge} = \max(0, \text{Billed Base} - \text{Contract Base}) + \max(0, \text{Billed Fuel} - \text{Fuel Cap}) + \max(0, \text{Billed Offload} - \text{Offload Cap}) + \text{FX Premium} + \text{GPS Penalty}$$
