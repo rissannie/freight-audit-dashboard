@@ -517,7 +517,7 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
                         else f"{clean_fname}{suffix}"
                     )
 
-                      etims_serial = etims_match.group(1).strip() if etims_match else "MISSING_ETIMS_CU"
+                    etims_serial = etims_match.group(1).strip() if etims_match else "MISSING_ETIMS_CU"
                     etims_upper = etims_serial.upper()
                     is_etims_valid = bool(etims_serial) and not (
                         "MISSING" in etims_upper
@@ -733,22 +733,22 @@ def match_contract_tariff(df_inv: pd.DataFrame, df_rates: pd.DataFrame) -> pd.Da
                     lambda rc: bool(rc) and (rc in inv_carrier or inv_carrier in rc)
                 )
             ]
-            if not matched_c.empty:
+        if not matched_c.empty:
                 candidates = matched_c
 
-             if route_col and inv_route and inv_route != "n/a":
+        if route_col and inv_route and inv_route != "n/a":
             matched_r = candidates[
                 candidates[route_col].astype(str).apply(_norm_route).apply(
                     lambda rr: bool(rr) and (rr == inv_route or rr in inv_route or inv_route in rr)
                 )
             ]
 
-            if not matched_r.empty:
+        if not matched_r.empty:
                 candidates = matched_r
 
         if tonnage_col and inv_ton > 0:
             matched_t = candidates[np.isclose(candidates[tonnage_col], inv_ton, atol=1.0)]
-            if not matched_t.empty:
+        if not matched_t.empty:
                 candidates = matched_t
 
         best = candidates.iloc[0] if not candidates.empty else pd.Series(dtype=float)
