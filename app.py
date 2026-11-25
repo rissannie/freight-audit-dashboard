@@ -400,21 +400,41 @@ if st.sidebar.button("Logout"):
 # ------------------------------------------------------------------------------
 # 3. UNIVERSAL LINE-ITEM PDF PARSING ENGINE & VOUCHER GENERATORS
 # ------------------------------------------------------------------------------
-def _parse_amount(val_str: str) -> float:
-    if not val_str:
+def _parse_amount(val_str) -> float:
+    if val_str is None or (isinstance(val_str, float) and np.isnan(val_str)):
         return 0.0
-    cleaned = re.sub(r"[^\d.]", "", str(val_str))
+    s = str(val_str).strip()
+    if not s or s.upper() in {"N/A", "NA", "NONE", "NULL", "-"}:
+        return 0.0
+    is_neg = bool(re.match(r"^\(.*\)$", s))
+    if is_neg:
+        s = s[1:-1]
+    cleaned = re.sub(r"[^\d.]", "", s)
+    if not cleaned:
+        return 0.0
+    parts = cleaned.split(".")
+    if len(parts) > 2:
+        cleaned = "".join(parts[:-1]) + "." + parts[-1]
     try:
-        return float(cleaned) if cleaned else 0.0
+        num = float(cleaned)
+        return -num if is_neg else num
     except ValueError:
         return 0.0
+
+
+def _is_truthy_flag(val) -> bool:
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return not np.isnan(val) and float(val) != 0.0
+    return str(val).strip().upper() in {"YES", "TRUE", "1", "Y", "BREACH", "DEVIATION"}
 
 
 def parse_pdf_invoice_universal(file_obj, usd_rate):
     """
     Extracts structured line items (Base Rate, Fuel Surcharge, Offloading, Detention, VAT, Total),
-    splits repeated invoice blocks on the same page, and handles both integer (145,000) and
-    decimal (145,000.00) currency formats.
+    supports both inline labels and stacked multi-line PDF table layouts, splits repeated
+    invoice blocks on the same page, and handles both integer and decimal currency formats.
     """
     records = []
     clean_fname = os.path.splitext(file_obj.name)[0]
@@ -423,64 +443,99 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
         with pdfplumber.open(file_obj) as pdf:
             for page_num, page in enumerate(pdf.pages, start=1):
                 text = page.extract_text() or ""
+                if not text.strip():
+                    continue
 
                 # Split repeated invoice blocks on the same page if standalone "INVOICE" headers exist
-                blocks = re.split(r"(?im)^\s*INVOICE\s*$", text.strip())
+                blocks = re.split(r"(?im)^\s*(?:TAX\s+INVOICE|INVOICE)\s*$", text.strip())
                 blocks = [b.strip() for b in blocks if b.strip()] or [text]
 
                 for block_idx, block in enumerate(blocks, start=1):
-                    inv_match = re.search(
-                        r"(?:Invoice\s*(?:#|No\.?)|Inv\s*#?|Doc\s*#?)\s*[:.]?\s*([A-Za-z0-9-]+)",
-                        block,
-                        re.IGNORECASE,
+                    lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+
+                    inv_match = (
+                        re.search(r"\b(INV[-/][A-Za-z0-9-]+)\b", block, re.IGNORECASE)
+                        or re.search(
+                            r"(?:Invoice\s*(?:#|No\.?|Number)?|Inv\s*#?|Doc\s*#?)\s*[:.]?[ \t]*([A-Za-z0-9_-]{2,})",
+                            block,
+                            re.IGNORECASE,
+                        )
                     )
+
                     # Single-line carrier capture (never crosses newlines)
                     carrier_match = re.search(
-                        r"^([A-Za-z0-9&.,' -]+?(?:Logistics|Transport|Express|Freight|Limited|Ltd|Group|Hauliers|Cargo|Swara|Kefar|Siginon|Rift)[A-Za-z0-9&.,' -]*)$",
+                        r"^([A-Za-z0-9&.,' -]+?(?:Logistics|Transport|Express|Freight|Limited|Ltd|Group|Hauliers|Cargo|Swara|Kefar|Siginon|Rift|Movers|Shipping|Services)[A-Za-z0-9&.,' -]*)$",
                         block,
                         re.IGNORECASE | re.MULTILINE,
                     )
-                    bol_match = re.search(
-                        r"(?:BoL|Bill\s*of\s*Lading|Waybill)\s*(?:Ref|ID|#)?\s*[:.]?\s*([A-Za-z0-9-]+)",
-                        block,
-                        re.IGNORECASE,
+                    if not carrier_match:
+                        for ln in lines[:5]:
+                            if not re.search(
+                                r"\b(TAX INVOICE|INVOICE|DATE|BILL TO|ROUTE|TRUCK|BOL|ETIMS|KRA PIN)\b",
+                                ln,
+                                re.IGNORECASE,
+                            ) and len(ln) >= 4:
+                                carrier_match = re.match(r"^(.+)$", ln)
+                                break
+
+                    bol_match = (
+                        re.search(r"\b(BOL[-/][A-Za-z0-9-]+|WB[-/][A-Za-z0-9-]+)\b", block, re.IGNORECASE)
+                        or re.search(
+                            r"(?:BoL|Bill\s*of\s*Lading|Waybill|Consignment)\s*(?:Ref|ID|No|#)?\s*[:.]?[ \t]*([A-Za-z0-9_-]{2,})",
+                            block,
+                            re.IGNORECASE,
+                        )
                     )
+
                     etims_match = re.search(
-                        r"(?:eTIMS\s*(?:CU)?\s*(?:Serial|No)?\s*[:#-]?\s*)?(\b(?:KRA|CU|eTIMS)[A-Za-z0-9-]{6,25}\b|\b(?:MISSING|INVALID)[A-Za-z0-9_-]*\b)",
+                        r"(?:eTIMS\s*(?:CU)?\s*(?:Serial|No)?\s*[:#-]?\s*)?(\b(?:KRA|CU|eTIMS|EFRIS|TIMS)[A-Za-z0-9-]{5,25}\b|\b(?:MISSING|INVALID)[A-Za-z0-9_-]*\b)",
                         block,
                         re.IGNORECASE,
                     )
+                    pending_etims = bool(re.search(r"PENDING\s*(?:KRA|CU|ETIMS)", block, re.IGNORECASE))
+
                     fx_match = re.search(
-                        r"(?:FX|Exchange\s*Rate|USD/KES)\s*[:=]?\s*(\d{2,3}(?:\.\d{1,4})?)",
-                        block,
-                        re.IGNORECASE,
-                    )
-                    route_match = re.search(
-                        r"(?:Route|Corridor|Lane)\s*[:=]?\s*([A-Za-z0-9 \-–>]+)",
+                        r"(?:FX\s*Rate(?:\s*\([A-Z/]+\))?|Exchange\s*Rate|USD\s*/\s*KES|KES\s*/\s*USD)\s*[:=]?\s*(\d{1,4}(?:\.\d{1,4})?)",
                         block,
                         re.IGNORECASE,
                     )
 
-                    truck_match = re.search(
-                        r"(?:Truck|Plate|Reg|Vehicle)\s*(?:No|ID|#)?\s*[:=]?\s*([A-Z]{2,3}\s?\d{3}[A-Z]?|TRK-\d+)",
-                        block,
-                        re.IGNORECASE,
+                    route_match = (
+                        re.search(
+                            r"(?:Route|Corridor|Lane|Origin\s*-\s*Dest(?:ination)?)\s*[:=]?[ \t]*([A-Za-z0-9 .,'()/-]{4,60})",
+                            block,
+                            re.IGNORECASE,
+                        )
+                        or re.search(
+                            r"\b([A-Z][a-zA-Z0-9 .]+?\s*(?:-|–|—|->|to)\s*[A-Z][a-zA-Z0-9 .]+?)\b",
+                            block,
+                        )
                     )
+
+                    truck_match = (
+                        re.search(
+                            r"(?:Truck|Plate|Reg|Vehicle|Fleet)\s*(?:No|ID|Reg|#)?\s*[:=]?[ \t]*([A-Z0-9 -]{4,15})",
+                            block,
+                            re.IGNORECASE,
+                        )
+                        or re.search(r"\b([A-Z]{2,3}\s?\d{3}[A-Z]?|TRK-\d+)\b", block)
+                    )
+
                     tonnage_match = re.search(
-                        r"(\d+(?:\.\d+)?)\s*(?:Ton|Tons|Tonne|Tonnes|T) ",
+                        r"(\d+(?:\.\d+)?)\s*(?:Ton|Tons|Tonne|Tonnes|MT)\b",
                         block,
                         re.IGNORECASE,
                     )
 
-                    # Line-item extractions (supports both comma integers and decimals)
-                    num_pat = r"(?:KES|USD)?\s*([\d,]+(?:\.\d{1,2})?)"
-                    base_match = re.search(rf"Base\s*(?:Rate|Freight)?\s*[:=]?\s*{num_pat}", block, re.IGNORECASE)
-                    fuel_match = re.search(rf"Fuel\s*(?:Surcharge|Allowance|FAF)?\s*[:=]?\s*{num_pat}", block, re.IGNORECASE)
-                    offload_match = re.search(rf"(?:Offloading|Loading|Handling)\s*[:=]?\s*{num_pat}", block, re.IGNORECASE)
-                    detention_match = re.search(rf"(?:Detention|Demurrage|Waiting\s*Time)\s*[:=]?\s*{num_pat}", block, re.IGNORECASE)
-                    subtotal_match = re.search(rf"SUBTOTAL\s*[:=]?\s*{num_pat}", block, re.IGNORECASE)
-                    vat_match = re.search(rf"VAT\s*(?:\(\d+%\))?\s*[:=]?\s*{num_pat}", block, re.IGNORECASE)
-                    total_match = re.search(rf"(?:TOTAL\s*DUE|GRAND\s*TOTAL|TOTAL)\s*[:=]?\s*{num_pat}", block, re.IGNORECASE)
+                    # Line-item extractions (supports inline, described, and stacked table rows)
+                    num_pat = r"(?:KES|USD|UGX|TZS|ZMW|\$)?[ \t]*([\d,]+(?:\.\d{1,2})?)"
+                    base_match = re.search(rf"\bBase\s*(?:Rate|Freight)?[^\d\n]*?\s*{num_pat}", block, re.IGNORECASE)
+                    fuel_match = re.search(rf"\bFuel\s*(?:Surcharge|Allowance|FAF|Adjustment)?[^\d\n]*?\s*{num_pat}", block, re.IGNORECASE)
+                    offload_match = re.search(rf"\b(?:Offloading|Loading|Handling)[^\d\n]*?\s*{num_pat}", block, re.IGNORECASE)
+                    detention_match = re.search(rf"\b(?:Detention|Demurrage|Waiting\s*Time)[^\d\n]*?\s*{num_pat}", block, re.IGNORECASE)
+                    subtotal_match = re.search(rf"\bSUBTOTAL\s*[:=]?\s*{num_pat}", block, re.IGNORECASE)
+                    vat_match = re.search(rf"\bVAT(?:\s*\(\d+(?:\.\d+)?%\))?\s*[:=]?\s*{num_pat}", block, re.IGNORECASE)
+                    total_match = re.search(rf"\b(?:TOTAL\s*DUE|GRAND\s*TOTAL|TOTAL\s*AMOUNT|NET\s*PAYABLE)\s*[:=]?\s*{num_pat}", block, re.IGNORECASE)
 
                     billed_base = _parse_amount(base_match.group(1)) if base_match else 0.0
                     billed_fuel = _parse_amount(fuel_match.group(1)) if fuel_match else 0.0
@@ -491,15 +546,17 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
                     billed_total = _parse_amount(total_match.group(1)) if total_match else 0.0
 
                     # Fallback if invoice is a single lump sum without itemized labels
-                    if billed_base == 0.0:
-                        raw_nums = re.findall(r" \d{1,3}(?:,\d{3})+(?:\.\d{1,2})? | \d+\.\d{2} ", block)
-                        amounts = [_parse_amount(n) for n in raw_nums]
-                        if billed_subtotal > 0:
+                    item_sum = billed_base + billed_fuel + billed_offload + billed_detention
+                    if item_sum == 0.0:
+                        if billed_subtotal > 0.0:
                             billed_base = billed_subtotal
-                        elif billed_total > 0:
+                        elif billed_total > 0.0:
                             billed_base = billed_total
-                        elif amounts:
-                            billed_base = max(amounts)
+                        else:
+                            raw_nums = re.findall(r"\b\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?\b|\b\d+\.\d{2}\b", block)
+                            amounts = [_parse_amount(n) for n in raw_nums]
+                            if amounts:
+                                billed_base = max(amounts)
 
                     if billed_subtotal == 0.0:
                         billed_subtotal = billed_base + billed_fuel + billed_offload + billed_detention
@@ -519,12 +576,11 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
 
                     etims_serial = etims_match.group(1).strip() if etims_match else "MISSING_ETIMS_CU"
                     etims_upper = etims_serial.upper()
-                    is_etims_valid = bool(etims_serial) and not (
+                    is_etims_valid = bool(etims_serial) and not pending_etims and not (
                         "MISSING" in etims_upper
                         or "INVALID" in etims_upper
                         or etims_upper in {"N/A", "NONE", "PENDING"}
                     )
-
 
                     records.append({
                         "Invoice_No": invoice_id,
@@ -718,7 +774,9 @@ def match_contract_tariff(df_inv: pd.DataFrame, df_rates: pd.DataFrame) -> pd.Da
     contract_bases, max_fuels, max_offloads = [], [], []
 
     def _norm_route(val: str) -> str:
-        return re.sub(r"\s+", " ", str(val).replace("–", "-").replace("—", "-").lower()).strip()
+        s = str(val).replace("–", "-").replace("—", "-").replace("->", "-")
+        s = re.sub(r"\s+to\s+", "-", s, flags=re.IGNORECASE)
+        return re.sub(r"\s+", " ", s.lower()).strip()
 
     for _, inv in df_inv.iterrows():
         inv_carrier = str(inv.get("Carrier", "")).lower().strip()
@@ -743,6 +801,15 @@ def match_contract_tariff(df_inv: pd.DataFrame, df_rates: pd.DataFrame) -> pd.Da
             ]
             if not matched_r.empty:
                 candidates = matched_r
+            elif not df_rates.empty:
+                # Fallback to route match across all carriers if carrier-specific route row is missing
+                global_r = df_rates[
+                    df_rates[route_col].astype(str).apply(_norm_route).apply(
+                        lambda rr: bool(rr) and (rr == inv_route or rr in inv_route or inv_route in rr)
+                    )
+                ]
+                if not global_r.empty:
+                    candidates = global_r
 
         if tonnage_col and inv_ton > 0:
             matched_t = candidates[np.isclose(candidates[tonnage_col], inv_ton, atol=1.0)]
@@ -839,26 +906,36 @@ with tabs[0]:
             pen = 0.0
             note = "NO_GPS_LOG"
             if not df_tele_ref.empty:
+                inv_id = str(r.get("Invoice_No", "")).strip()
                 bol = str(r.get("BoL_Ref", "")).strip()
                 trk = str(r.get("Truck_ID", "")).strip()
                 match_t = pd.DataFrame()
-                for col_cand in ["BoL_Ref", "bol_ref", "waybill_id", "Waybill_ID"]:
-                    if col_cand in df_tele_ref.columns and bol and bol != "N/A":
-                        match_t = df_tele_ref[df_tele_ref[col_cand].astype(str).str.strip() == bol]
+                for col_cand in ["Invoice_No", "invoice_id", "Invoice_ID"]:
+                    if col_cand in df_tele_ref.columns and inv_id and inv_id != "N/A":
+                        match_t = df_tele_ref[df_tele_ref[col_cand].astype(str).str.strip() == inv_id]
                         if not match_t.empty:
                             break
                 if match_t.empty:
-                    for col_cand in ["Truck_ID", "truck_reg", "Truck_Plate"]:
+                    for col_cand in ["BoL_Ref", "bol_ref", "waybill_id", "Waybill_ID"]:
+                        if col_cand in df_tele_ref.columns and bol and bol != "N/A":
+                            match_t = df_tele_ref[df_tele_ref[col_cand].astype(str).str.strip() == bol]
+                            if not match_t.empty:
+                                break
+                if match_t.empty:
+                    for col_cand in ["Truck_ID", "truck_reg", "Truck_Plate", "vehicle_id"]:
                         if col_cand in df_tele_ref.columns and trk and trk != "N/A":
                             match_t = df_tele_ref[df_tele_ref[col_cand].astype(str).str.strip() == trk]
                             if not match_t.empty:
                                 break
                 if not match_t.empty:
                     tr = match_t.iloc[0]
-                    breach = bool(tr.get("Geofence_Breach", tr.get("geofence_deviation_flag", False)))
-                    fuel_drop = float(tr.get("Fuel_Drop_Liters", 0.0))
+                    breach = _is_truthy_flag(tr.get("Geofence_Breach", tr.get("geofence_deviation_flag", False)))
+                    fuel_drop = _parse_amount(tr.get("Fuel_Drop_Liters", 0.0))
+                    if fuel_drop == 0.0 and "fuel_consumed_liters" in tr and "expected_fuel_liters" in tr:
+                        fuel_drop = max(0.0, _parse_amount(tr["fuel_consumed_liters"]) - _parse_amount(tr["expected_fuel_liters"]))
+                    pod_status = str(tr.get("POD_Status", "")).strip().upper()
                     note = "GPS_VERIFIED"
-                    if breach or fuel_drop > 10.0:
+                    if breach or fuel_drop > 10.0 or pod_status in {"SHORT_DELIVERY", "DELAYED_SLA", "FAILED", "DAMAGED"}:
                         pen = round(fuel_drop * 210.0, 2) if fuel_drop > 10.0 else 5000.0
                         note = "GPS_DEVIATION_FLAG"
             gps_penalties.append(pen)
@@ -1101,11 +1178,11 @@ with tabs[1]:
         # Normalize column aliases so both schema conventions work seamlessly
         df_t = df_tele.copy()
         if "Fuel_Drop_Liters" not in df_t.columns and {"fuel_consumed_liters", "expected_fuel_liters"}.issubset(df_t.columns):
-            df_t["Fuel_Drop_Liters"] = np.maximum(0.0, df_t["fuel_consumed_liters"] - df_t["expected_fuel_liters"])
+            df_t["Fuel_Drop_Liters"] = np.maximum(0.0, pd.to_numeric(df_t["fuel_consumed_liters"], errors="coerce").fillna(0.0) - pd.to_numeric(df_t["expected_fuel_liters"], errors="coerce").fillna(0.0))
         if "Idle_Hours" not in df_t.columns and "engine_idle_minutes" in df_t.columns:
-            df_t["Idle_Hours"] = df_t["engine_idle_minutes"] / 60.0
+            df_t["Idle_Hours"] = pd.to_numeric(df_t["engine_idle_minutes"], errors="coerce").fillna(0.0) / 60.0
         if "Actual_KM" not in df_t.columns and "gps_distance_km" in df_t.columns:
-            df_t["Actual_KM"] = df_t["gps_distance_km"]
+            df_t["Actual_KM"] = pd.to_numeric(df_t["gps_distance_km"], errors="coerce").fillna(0.0)
         if "Truck_ID" not in df_t.columns and "truck_reg" in df_t.columns:
             df_t["Truck_ID"] = df_t["truck_reg"]
         if "Driver" not in df_t.columns:
@@ -1113,12 +1190,16 @@ with tabs[1]:
         if "Geofence_Breach" not in df_t.columns and "geofence_deviation_flag" in df_t.columns:
             df_t["Geofence_Breach"] = df_t["geofence_deviation_flag"]
 
+        for num_c in ["Fuel_Drop_Liters", "Idle_Hours", "Actual_KM", "Planned_KM", "Weekly_Total_KM"]:
+            if num_c in df_t.columns:
+                df_t[num_c] = pd.to_numeric(df_t[num_c], errors="coerce").fillna(0.0)
+
         siphoning_df = df_t[df_t["Fuel_Drop_Liters"] > 10.0] if "Fuel_Drop_Liters" in df_t.columns else pd.DataFrame()
         idling_df = df_t[df_t["Idle_Hours"] > max_idle_threshold] if "Idle_Hours" in df_t.columns else pd.DataFrame()
         route_dev_df = (
             df_t[df_t["Actual_KM"] > (df_t["Planned_KM"] * 1.10)]
             if {"Actual_KM", "Planned_KM"}.issubset(df_t.columns)
-            else (df_t[df_t["Geofence_Breach"] == True] if "Geofence_Breach" in df_t.columns else pd.DataFrame())
+            else (df_t[df_t["Geofence_Breach"].apply(_is_truthy_flag)] if "Geofence_Breach" in df_t.columns else pd.DataFrame())
         )
         maintenance_df = df_t[df_t["Weekly_Total_KM"] > 1200] if "Weekly_Total_KM" in df_t.columns else pd.DataFrame()
 
