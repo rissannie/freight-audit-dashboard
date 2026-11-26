@@ -671,33 +671,53 @@ def generate_short_pay_voucher_pdf(row_data):
 
 def generate_batch_summary_pdf(df):
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=landscape(letter))
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(letter),
+        leftMargin=24,
+        rightMargin=24,
+        topMargin=24,
+        bottomMargin=24,
+    )
     elements = []
     styles = getSampleStyleSheet()
+    cell_style = styles["BodyText"].clone("BatchCell")
+    cell_style.fontName = "Helvetica"
+    cell_style.fontSize = 8
+    cell_style.leading = 10
+    cell_style.wordWrap = "CJK"
 
     elements.append(Paragraph(f"Executive Batch Audit Summary - {datetime.now().strftime('%Y-%m-%d')}", styles["Title"]))
     elements.append(Spacer(1, 12))
 
     data = [["Invoice No", "Carrier", "BoL Ref", "Billed (KES)", "Overcharge (KES)", "Approved Pay (KES)", "Status"]]
     for _, row in df.iterrows():
+        inv_str = str(row.get("Invoice_No", "N/A"))
+        carrier_str = str(row.get("Carrier", "N/A"))
+        bol_str = str(row.get("BoL_Ref", "N/A"))
+        status_str = str(row.get("Audit_Status", "N/A"))
         data.append([
-            str(row.get("Invoice_No", "N/A")),
-            str(row.get("Carrier", "N/A"))[:22],
-            str(row.get("BoL_Ref", "N/A")),
+            Paragraph(inv_str, cell_style),
+            Paragraph(carrier_str, cell_style),
+            Paragraph(bol_str, cell_style),
             f"{row.get('Billed_Total', 0.0):,.2f}",
             f"{row.get('Total_Overcharge', 0.0):,.2f}",
             f"{row.get('Approved_Payable', 0.0):,.2f}",
-            str(row.get("Audit_Status", "N/A")),
+            Paragraph(status_str, cell_style),
         ])
 
-    table = Table(data, colWidths=[95, 130, 85, 95, 95, 100, 140])
+    table = Table(data, colWidths=[115, 130, 105, 85, 85, 84, 120], repeatRows=1)
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0F172A")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
-        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("ALIGN", (0, 0), (2, -1), "LEFT"),
+        ("ALIGN", (3, 0), (5, -1), "RIGHT"),
+        ("ALIGN", (6, 0), (6, -1), "LEFT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ("BOTTOMPADDING", (0, 0), (-1, 0), 10),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F8FAFC")),
         ("GRID", (0, 0), (-1, -1), 0.75, colors.HexColor("#CBD5E1")),
     ]))
