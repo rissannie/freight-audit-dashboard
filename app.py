@@ -429,22 +429,26 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
 
                 for block_idx, block in enumerate(blocks, start=1):
                     inv_match = re.search(
-                        r"(?:Invoice\s*(?:#|No\.?)|Inv\s*#?|Doc\s*#?)\s*[:.]?\s*([A-Za-z0-9/-]+)",
+                        r"(?:Invoice\s*(?:#|No\.?)|Inv\s*#?|Doc\s*#?)\s*[:.]?\s*(INV-\d{4}-\d+|[A-Za-z0-9/-]+)",
                         block,
                         re.IGNORECASE,
                     )
                     carrier_match = re.search(
-                        r"^([A-Za-z0-9&.,' -]+?(?:Logistics|Transport|Express|Freight|Limited|Ltd|Group|Hauliers|Cargo|Swara|Kefar|Siginon|Rift|Movers|Carriers)[A-Za-z0-9&.,' -]*)$",
+                        r"^([A-Za-z0-9&.,' -]+?(?:Logistics|Transport|Express|Freight|Limited|Ltd|Group|Hauliers|Cargo|Swara|Kefar|Siginon|Rift|Movers|Carriers)[A-Za-z0-9&.,' -]*?)(?:\s*\||\s*KRA PIN|$)",
                         block,
                         re.IGNORECASE | re.MULTILINE,
                     )
                     bol_match = re.search(
-                        r"(?:BoL|Bill\s*of\s*Lading|Waybill|Consignment)\s*(?:Ref|No|ID|#)?\s*[:.]?\s*([A-Za-z0-9/-]+)",
+                        r"\b(BOL-\d+[A-Za-z0-9-]*)\b|(?:BoL|Bill\s*of\s*Lading|Waybill|Consignment)\s*(?:Ref|No|ID|#)?\s*[:.]?\s*([A-Za-z0-9/-]+)",
                         block,
                         re.IGNORECASE,
                     )
+                    bol_val = ""
+                    if bol_match:
+                        bol_val = (bol_match.group(1) or bol_match.group(2) or "").strip()
+
                     etims_match = re.search(
-                        r"(?:eTIMS\s*(?:CU)?\s*(?:Serial|No)?\s*[:#-]?\s*)?(\b(?:KRA|CU|eTIMS)[A-Za-z0-9-]{6,25}\b|\b(?:MISSING|INVALID|PENDING)[A-Za-z0-9_() -]*\b)",
+                        r"\b(KRA[A-Za-z0-9-]{5,25}|CU[A-Za-z0-9-]{5,25})\b|(?:eTIMS\s*(?:CU)?\s*(?:Serial|No)?\s*[:#-]?\s*)?(\b(?:MISSING|INVALID|PENDING)[A-Za-z0-9_() -]*\b)",
                         block,
                         re.IGNORECASE,
                     )
@@ -453,15 +457,20 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
                         block,
                         re.IGNORECASE,
                     )
-                    route_match = re.search(
-                        r"(?:Route|Corridor|Lane)\s*[:=]?\s*([^\n\r|]+)",
+                    corridor_match = re.search(
+                        r"\b((?:Mombasa|Nairobi|Kisumu|Eldoret|Nakuru|Kampala|Kigali|Malaba|Namanga)\s*[-–—]\s*(?:Mombasa|Nairobi|Kisumu|Eldoret|Nakuru|Kampala|Kigali|Malaba|Namanga))\b",
                         block,
                         re.IGNORECASE,
                     )
+                    if corridor_match:
+                        route_val = re.sub(r"\s+", " ", corridor_match.group(1).replace("–", "-").replace("—", "-")).strip()
+                    else:
+                        route_match = re.search(r"(?:Route|Corridor|Lane)\s*[:=]\s*([^\n\r|]+)", block, re.IGNORECASE)
+                        route_val = route_match.group(1).strip() if route_match else "N/A"
+
                     truck_match = re.search(
-                        r"(?:Truck|Plate|Reg|Vehicle)\s*(?:No|ID|#)?\s*[:=]?\s*([A-Z]{2,3}\s?\d{3}[A-Z]?|TRK-\d+)",
+                        r"\b([A-Z]{2,3}\s?\d{3}[A-Z]?|TRK-\d+)\b",
                         block,
-                        re.IGNORECASE,
                     )
                     tonnage_match = re.search(
                         r"\b(\d+(?:\.\d+)?)\s*(?:Ton|Tons|Tonne|Tonnes|T)\b",
@@ -476,15 +485,15 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
                     billed_fx = float(fx_match.group(1)) if fx_match else float(usd_rate)
                     fx_mult = billed_fx if is_usd_invoice else 1.0
 
-                    # Line-item extractions (supports both comma integers and decimals)
-                    num_pat = r"(?:KES|USD|\$)?\s*([\d,]+(?:\.\d{1,2})?)"
-                    base_match = re.search(rf"Base\s*(?:Rate|Freight)?[^\n\r\d]*{num_pat}", block, re.IGNORECASE)
-                    fuel_match = re.search(rf"Fuel\s*(?:Surcharge|Allowance|FAF)?[^\n\r\d]*{num_pat}", block, re.IGNORECASE)
-                    offload_match = re.search(rf"(?:Offloading|Loading|Handling)[^\n\r\d]*{num_pat}", block, re.IGNORECASE)
-                    detention_match = re.search(rf"(?:Detention|Demurrage|Waiting\s*Time)[^\n\r\d]*{num_pat}", block, re.IGNORECASE)
-                    subtotal_match = re.search(rf"SUBTOTAL\s*[:=]?\s*{num_pat}", block, re.IGNORECASE)
-                    vat_match = re.search(rf"VAT\s*(?:\(\d+(?:\.\d+)?%\))?\s*[:=]?\s*{num_pat}", block, re.IGNORECASE)
-                    total_match = re.search(rf"(?:TOTAL\s*DUE|GRAND\s*TOTAL|AMOUNT\s*DUE|TOTAL)\s*[:=]?\s*{num_pat}", block, re.IGNORECASE)
+                    # Line-item extractions (supports both comma integers and decimals, same-line or next-line)
+                    num_pat = r"(?:KES|USD|\$)?\s*\|?\s*([\d,]+(?:\.\d{1,2})?)"
+                    base_match = re.search(rf"Base\s*(?:Rate|Freight)?[^\n\r]*\n?\s*\|?\s*{num_pat}", block, re.IGNORECASE)
+                    fuel_match = re.search(rf"Fuel\s*(?:Surcharge|Allowance|FAF)?[^\n\r]*\n?\s*\|?\s*{num_pat}", block, re.IGNORECASE)
+                    offload_match = re.search(rf"(?:Offloading|Loading|Handling)[^\n\r]*\n?\s*\|?\s*{num_pat}", block, re.IGNORECASE)
+                    detention_match = re.search(rf"(?:Detention|Demurrage|Waiting\s*Time)[^\n\r]*\n?\s*\|?\s*{num_pat}", block, re.IGNORECASE)
+                    subtotal_match = re.search(rf"SUBTOTAL\s*[:=]?\s*\n?\s*\|?\s*{num_pat}", block, re.IGNORECASE)
+                    vat_match = re.search(rf"VAT\s*(?:\(\d+(?:\.\d+)?%\))?\s*[:=]?\s*\n?\s*\|?\s*{num_pat}", block, re.IGNORECASE)
+                    total_match = re.search(rf"(?:TOTAL\s*DUE|GRAND\s*TOTAL|AMOUNT\s*DUE)\s*[:=]?\s*\n?\s*\|?\s*{num_pat}", block, re.IGNORECASE)
 
                     billed_base = round(_parse_amount(base_match.group(1)) * fx_mult, 2) if base_match else 0.0
                     billed_fuel = round(_parse_amount(fuel_match.group(1)) * fx_mult, 2) if fuel_match else 0.0
@@ -515,13 +524,18 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
                     if len(blocks) > 1:
                         suffix += f"_B{block_idx}"
 
-                    invoice_id = (
-                        inv_match.group(1).strip()
-                        if inv_match and len(inv_match.group(1).strip()) > 1
-                        else f"{clean_fname}{suffix}"
-                    )
+                    raw_inv = inv_match.group(1).strip() if inv_match else ""
+                    if raw_inv.lower() in {"", "bol", "ref", "no", "route", "truck", "bill"}:
+                        inv_fb = re.search(r"\b(INV-\d{4}-\d+)\b", block, re.IGNORECASE)
+                        invoice_id = inv_fb.group(1).strip() if inv_fb else f"{clean_fname}{suffix}"
+                    else:
+                        invoice_id = raw_inv if len(raw_inv) > 1 else f"{clean_fname}{suffix}"
 
-                    etims_serial = etims_match.group(1).strip() if etims_match else "MISSING_ETIMS_CU"
+                    etims_serial = ""
+                    if etims_match:
+                        etims_serial = (etims_match.group(1) or etims_match.group(2) or "").strip()
+                    if not etims_serial:
+                        etims_serial = "MISSING_ETIMS_CU"
                     etims_upper = etims_serial.upper()
                     is_etims_valid = bool(etims_serial) and not (
                         "MISSING" in etims_upper
@@ -533,8 +547,8 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
                     records.append({
                         "Invoice_No": invoice_id,
                         "Carrier": carrier_match.group(1).strip() if carrier_match else "Unknown Carrier",
-                        "BoL_Ref": bol_match.group(1).strip() if bol_match else "N/A",
-                        "Route": route_match.group(1).strip() if route_match else "N/A",
+                        "BoL_Ref": bol_val if bol_val else "N/A",
+                        "Route": route_val,
                         "Truck_ID": truck_match.group(1).strip() if truck_match else "N/A",
                         "Vehicle_Tonnage": float(tonnage_match.group(1)) if tonnage_match else 0.0,
                         "Currency": "USD" if is_usd_invoice else "KES",
