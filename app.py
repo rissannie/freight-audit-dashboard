@@ -1403,4 +1403,3 @@ with tabs[5]:
 with tabs[6]:
     st.subheader("👤 User Profile & System Capabilities")
     st.write(f"**Logged in user:** {st.session_state['username']} | **Role:** {st.session_state['role'].upper()}")
-```[cite: 506]
