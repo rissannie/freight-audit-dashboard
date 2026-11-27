@@ -442,7 +442,7 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
 
                 for block_idx, block in enumerate(blocks, start=1):
                     inv_match = re.search(
-                        r"\b(INV-\d{4}-\d+)\b|(?:Invoice\s*(?:#|No\.?)|Inv\s*#?|Doc\s*#?)\s*[:.]?\s*([A-Za-z0-9/-]+)",
+                        r"\b(INV-\d{4}-\d+)\b|(?:Invoice\s*(?:#|No\.?)|Inv\s*#?|Doc\s*#?)\s*[:.]?\s*\n?\s*\|?\s*([A-Za-z0-9/-]+)",
                         block,
                         re.IGNORECASE,
                     )
@@ -655,6 +655,146 @@ def generate_batch_summary_pdf(df):
         ("FONTSIZE", (0, 0), (-1, -1), 8),
         ("TOPPADDING", (0, 0), (-1, -1), 4),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F8FAFC")),
+        ("GRID", (0, 0), (-1, -1), 0.75, colors.HexColor("#CBD5E1")),
+    ]))
+    elements.append(table)
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+
+
+def generate_pdf_debit_note(row):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=letter,
+        leftMargin=36,
+        rightMargin=36,
+        topMargin=36,
+        bottomMargin=36,
+    )
+    elements = []
+    styles = getSampleStyleSheet()
+    cell_style = styles["BodyText"].clone("DebitCell")
+    cell_style.fontName = "Helvetica"
+    cell_style.fontSize = 9
+    cell_style.leading = 12
+    cell_style.wordWrap = "CJK"
+
+    inv_no = str(row.get("Invoice_No", "N/A"))
+    carrier = str(row.get("Carrier", "N/A"))
+    bol_ref = str(row.get("BoL_Ref", "N/A"))
+    route = str(row.get("Route", "N/A"))
+    status = str(row.get("Audit_Status", "N/A"))
+    billed = float(row.get("Billed_Total", 0.0) or 0.0)
+    overcharge = float(row.get("Total_Overcharge", 0.0) or 0.0)
+    approved = float(row.get("Approved_Payable", 0.0) or 0.0)
+    base_ov = float(row.get("Base_Overcharge", 0.0) or 0.0)
+    fuel_ov = float(row.get("Fuel_Overcharge", 0.0) or 0.0)
+    off_ov = float(row.get("Offload_Overcharge", 0.0) or 0.0)
+    fx_ov = float(row.get("FX_Overcharge", 0.0) or 0.0)
+    gps_pen = float(row.get("GPS_Penalty", 0.0) or 0.0)
+    vat_ov = float(row.get("VAT_Overcharge", 0.0) or 0.0)
+
+    elements.append(Paragraph("FREIGHT AUDIT DEBIT / CREDIT CLAIM NOTICE", styles["Title"]))
+    elements.append(Spacer(1, 10))
+    elements.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", styles["Normal"]))
+    elements.append(Spacer(1, 12))
+
+    data = [
+        ["Audit Field", "Value"],
+        [Paragraph("Invoice No", cell_style), Paragraph(inv_no, cell_style)],
+        [Paragraph("Carrier", cell_style), Paragraph(carrier, cell_style)],
+        [Paragraph("BoL Ref", cell_style), Paragraph(bol_ref, cell_style)],
+        [Paragraph("Route", cell_style), Paragraph(route, cell_style)],
+        [Paragraph("Audit Status", cell_style), Paragraph(status, cell_style)],
+        [Paragraph("Base Rate Overcharge (KES)", cell_style), f"{base_ov:,.2f}"],
+        [Paragraph("Fuel Surcharge Overcharge (KES)", cell_style), f"{fuel_ov:,.2f}"],
+        [Paragraph("Offloading Overcharge (KES)", cell_style), f"{off_ov:,.2f}"],
+        [Paragraph("FX Premium Overcharge (KES)", cell_style), f"{fx_ov:,.2f}"],
+        [Paragraph("GPS / Telematics Penalty (KES)", cell_style), f"{gps_pen:,.2f}"],
+        [Paragraph("VAT Adjustment (KES)", cell_style), f"{vat_ov:,.2f}"],
+        [Paragraph("Gross Billed Total (KES)", cell_style), f"{billed:,.2f}"],
+        [Paragraph("Total Audited Deduction (KES)", cell_style), f"{overcharge:,.2f}"],
+        [Paragraph("Approved Net Payable (KES)", cell_style), f"{approved:,.2f}"],
+    ]
+    table = Table(data, colWidths=[230, 310], repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0F172A")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+        ("ALIGN", (0, 0), (0, -1), "LEFT"),
+        ("ALIGN", (1, 1), (1, 5), "LEFT"),
+        ("ALIGN", (1, 6), (1, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F8FAFC")),
+        ("GRID", (0, 0), (-1, -1), 0.75, colors.HexColor("#CBD5E1")),
+    ]))
+    elements.append(table)
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+
+
+def generate_short_pay_voucher_pdf(row):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=letter,
+        leftMargin=36,
+        rightMargin=36,
+        topMargin=36,
+        bottomMargin=36,
+    )
+    elements = []
+    styles = getSampleStyleSheet()
+    cell_style = styles["BodyText"].clone("VoucherCell")
+    cell_style.fontName = "Helvetica"
+    cell_style.fontSize = 9
+    cell_style.leading = 12
+    cell_style.wordWrap = "CJK"
+
+    inv_no = str(row.get("Invoice_No", "N/A"))
+    carrier = str(row.get("Carrier", "N/A"))
+    bol_ref = str(row.get("BoL_Ref", "N/A"))
+    route = str(row.get("Route", "N/A"))
+    status = str(row.get("Audit_Status", "N/A"))
+    billed = float(row.get("Billed_Total", 0.0) or 0.0)
+    overcharge = float(row.get("Total_Overcharge", 0.0) or 0.0)
+    approved = float(row.get("Approved_Payable", 0.0) or 0.0)
+
+    elements.append(Paragraph("REMITTANCE & SHORT-PAY VOUCHER", styles["Title"]))
+    elements.append(Spacer(1, 10))
+    elements.append(Paragraph(f"Voucher Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}", styles["Normal"]))
+    elements.append(Spacer(1, 12))
+
+    data = [
+        ["Remittance Item", "Amount / Reference"],
+        [Paragraph("Invoice No", cell_style), Paragraph(inv_no, cell_style)],
+        [Paragraph("Carrier", cell_style), Paragraph(carrier, cell_style)],
+        [Paragraph("BoL Ref", cell_style), Paragraph(bol_ref, cell_style)],
+        [Paragraph("Route", cell_style), Paragraph(route, cell_style)],
+        [Paragraph("Audit Status", cell_style), Paragraph(status, cell_style)],
+        [Paragraph("Gross Billed Amount (KES)", cell_style), f"{billed:,.2f}"],
+        [Paragraph("Less: Audited Deduction / Hold (KES)", cell_style), f"{overcharge:,.2f}"],
+        [Paragraph("Authorized Short-Pay Remittance (KES)", cell_style), f"{approved:,.2f}"],
+    ]
+    table = Table(data, colWidths=[240, 300], repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E3A8A")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+        ("ALIGN", (0, 0), (0, -1), "LEFT"),
+        ("ALIGN", (1, 1), (1, 5), "LEFT"),
+        ("ALIGN", (1, 6), (1, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
         ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F8FAFC")),
         ("GRID", (0, 0), (-1, -1), 0.75, colors.HexColor("#CBD5E1")),
     ]))
@@ -1356,6 +1496,7 @@ with tabs[5]:
                 conn.execute("DELETE FROM audit_ledger")
                 conn.commit()
                 conn.close()
+                st.session_state["audit_data"] = pd.DataFrame()
                 st.rerun()
 
     conn = sqlite3.connect(DB_FILE)
