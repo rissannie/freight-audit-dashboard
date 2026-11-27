@@ -403,7 +403,11 @@ if st.sidebar.button("Logout"):
 def _parse_amount(val_str: str) -> float:
     if not val_str:
         return 0.0
-    cleaned = re.sub(r"[^\d.]", "", str(val_str))
+    s = str(val_str).strip()
+    if s.count(".") > 1:
+        parts = s.split(".")
+        s = "".join(parts[:-1]) + "." + parts[-1]
+    cleaned = re.sub(r"[^\d.]", "", s)
     try:
         return float(cleaned) if cleaned else 0.0
     except ValueError:
@@ -422,41 +426,54 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
         with pdfplumber.open(file_obj) as pdf:
             for page_num, page in enumerate(pdf.pages, start=1):
                 text = page.extract_text() or ""
+                if not text.strip():
+                    continue
 
-                # Split repeated invoice blocks on the same page if standalone "INVOICE" headers exist
-                blocks = re.split(r"(?im)^\s*(?:TAX\s+)?INVOICE\s*$", text.strip())
-                blocks = [b.strip() for b in blocks if b.strip()] or [text]
+                # Only split a single page into multiple blocks if there are >= 2 standalone INVOICE/TAX INVOICE lines
+                invoice_headers = re.findall(r"(?im)^\s*(?:TAX\s+)?INVOICE\s*$", text.strip())
+                if len(invoice_headers) >= 2:
+                    blocks = [
+                        b.strip()
+                        for b in re.split(r"(?im)^\s*(?:TAX\s+)?INVOICE\s*$", text.strip())
+                        if b.strip()
+                    ]
+                else:
+                    blocks = [text.strip()]
 
                 for block_idx, block in enumerate(blocks, start=1):
                     inv_match = re.search(
-                        r"(?:Invoice\s*(?:#|No\.?)|Inv\s*#?|Doc\s*#?)\s*[:.]?\s*(INV-\d{4}-\d+|[A-Za-z0-9/-]+)",
+                        r"\b(INV-\d{4}-\d+)\b|(?:Invoice\s*(?:#|No\.?)|Inv\s*#?|Doc\s*#?)\s*[:.]?\s*([A-Za-z0-9/-]+)",
                         block,
                         re.IGNORECASE,
                     )
+                    raw_inv = ((inv_match.group(1) or inv_match.group(2) or "").strip()) if inv_match else ""
+                    if raw_inv.lower() in {"", "bol", "ref", "no", "route", "truck", "bill"}:
+                        suffix = ""
+                        if len(pdf.pages) > 1:
+                            suffix += f"_P{page_num}"
+                        if len(blocks) > 1:
+                            suffix += f"_B{block_idx}"
+                        invoice_id = f"{clean_fname}{suffix}"
+                    else:
+                        invoice_id = raw_inv
+
                     carrier_match = re.search(
                         r"^([A-Za-z0-9&.,' -]+?(?:Logistics|Transport|Express|Freight|Limited|Ltd|Group|Hauliers|Cargo|Swara|Kefar|Siginon|Rift|Movers|Carriers)[A-Za-z0-9&.,' -]*?)(?:\s*\||\s*KRA PIN|$)",
                         block,
                         re.IGNORECASE | re.MULTILINE,
                     )
+                    carrier_val = carrier_match.group(1).strip() if carrier_match else "Unknown Carrier"
+
                     bol_match = re.search(
                         r"\b(BOL-\d+[A-Za-z0-9-]*)\b|(?:BoL|Bill\s*of\s*Lading|Waybill|Consignment)\s*(?:Ref|No|ID|#)?\s*[:.]?\s*([A-Za-z0-9/-]+)",
                         block,
                         re.IGNORECASE,
                     )
-                    bol_val = ""
-                    if bol_match:
-                        bol_val = (bol_match.group(1) or bol_match.group(2) or "").strip()
+                    bol_val = ((bol_match.group(1) or bol_match.group(2) or "").strip()) if bol_match else "N/A"
+                    if bol_val.lower() in {"", "route", "truck", "no"}:
+                        bol_fb = re.search(r"\b(BOL-\d+[A-Za-z0-9-]*)\b", block, re.IGNORECASE)
+                        bol_val = bol_fb.group(1).strip() if bol_fb else "N/A"
 
-                    etims_match = re.search(
-                        r"\b(KRA[A-Za-z0-9-]{5,25}|CU[A-Za-z0-9-]{5,25})\b|(?:eTIMS\s*(?:CU)?\s*(?:Serial|No)?\s*[:#-]?\s*)?(\b(?:MISSING|INVALID|PENDING)[A-Za-z0-9_() -]*\b)",
-                        block,
-                        re.IGNORECASE,
-                    )
-                    fx_match = re.search(
-                        r"(?:FX|Exchange\s*Rate|USD/KES)\s*(?:\([^)]*\))?\s*[:=]?\s*(\d{2,4}(?:\.\d{1,4})?)",
-                        block,
-                        re.IGNORECASE,
-                    )
                     corridor_match = re.search(
                         r"\b((?:Mombasa|Nairobi|Kisumu|Eldoret|Nakuru|Kampala|Kigali|Malaba|Namanga)\s*[-–—]\s*(?:Mombasa|Nairobi|Kisumu|Eldoret|Nakuru|Kampala|Kigali|Malaba|Namanga))\b",
                         block,
@@ -465,8 +482,17 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
                     if corridor_match:
                         route_val = re.sub(r"\s+", " ", corridor_match.group(1).replace("–", "-").replace("—", "-")).strip()
                     else:
-                        route_match = re.search(r"(?:Route|Corridor|Lane)\s*[:=]\s*([^\n\r|]+)", block, re.IGNORECASE)
-                        route_val = route_match.group(1).strip() if route_match else "N/A"
+                        corridor_no_dash = re.search(
+                            r"\b((?:Mombasa|Nairobi|Kisumu|Eldoret|Nakuru|Kampala|Kigali|Malaba|Namanga)\s+(?:Mombasa|Nairobi|Kisumu|Eldoret|Nakuru|Kampala|Kigali|Malaba|Namanga))\b",
+                            block,
+                            re.IGNORECASE,
+                        )
+                        if corridor_no_dash:
+                            p1, p2 = corridor_no_dash.group(1).split()
+                            route_val = f"{p1} - {p2}"
+                        else:
+                            route_match = re.search(r"(?:Route|Corridor|Lane)\s*[:=]\s*([^\n\r|]+)", block, re.IGNORECASE)
+                            route_val = route_match.group(1).strip() if route_match else "N/A"
 
                     truck_match = re.search(
                         r"\b([A-Z]{2,3}\s?\d{3}[A-Z]?|TRK-\d+)\b",
@@ -478,18 +504,37 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
                         re.IGNORECASE,
                     )
 
-                    # Detect invoice currency (USD vs KES)
+                    etims_match = re.search(
+                        r"\b(KRA[A-Za-z0-9-]{5,25}|CU[A-Za-z0-9-]{5,25})\b|(?:eTIMS\s*(?:CU)?\s*(?:Serial|No)?\s*[:#-]?)?\s*(\b(?:MISSING|INVALID|PENDING)[A-Za-z0-9_() -]*\b)",
+                        block,
+                        re.IGNORECASE,
+                    )
+                    etims_serial = ((etims_match.group(1) or etims_match.group(2) or "").strip()) if etims_match else "MISSING_ETIMS_CU"
+                    if not etims_serial:
+                        etims_serial = "MISSING_ETIMS_CU"
+                    etims_upper = etims_serial.upper()
+                    is_etims_valid = bool(etims_serial) and not (
+                        "MISSING" in etims_upper
+                        or "INVALID" in etims_upper
+                        or "PENDING" in etims_upper
+                        or etims_upper in {"N/A", "NONE"}
+                    )
+
+                    fx_match = re.search(
+                        r"(?:FX\s*Rate\s*\(USD/KES\)|FX|Exchange\s*Rate|USD/KES)\s*[:=]?\s*\n?\s*\|?\s*(\d{2,4}(?:\.\d{1,4})?)",
+                        block,
+                        re.IGNORECASE,
+                    )
                     is_usd_invoice = bool(
                         re.search(r"\bAMOUNT\s*\(USD\)|\bTOTAL\s*(?:DUE)?\s*[:=]?\s*USD\b", block, re.IGNORECASE)
                     )
                     billed_fx = float(fx_match.group(1)) if fx_match else float(usd_rate)
                     fx_mult = billed_fx if is_usd_invoice else 1.0
 
-                    # Line-item extractions (supports both comma integers and decimals, same-line or next-line)
-                    num_pat = r"(?:KES|USD|\$)?\s*\|?\s*([\d,]+(?:\.\d{1,2})?)"
-                    base_match = re.search(rf"Base\s*(?:Rate|Freight)?[^\n\r]*\n?\s*\|?\s*{num_pat}", block, re.IGNORECASE)
-                    fuel_match = re.search(rf"Fuel\s*(?:Surcharge|Allowance|FAF)?[^\n\r]*\n?\s*\|?\s*{num_pat}", block, re.IGNORECASE)
-                    offload_match = re.search(rf"(?:Offloading|Loading|Handling)[^\n\r]*\n?\s*\|?\s*{num_pat}", block, re.IGNORECASE)
+                    num_pat = r"(?:KES|USD|\$)?\s*\|?\s*([\d,]+(?:\.[\d,]+)?)"
+                    base_match = re.search(rf"(?:FRT-001|Base\s*(?:Rate|Freight)?)[^\n\r]*\n?\s*\|?\s*{num_pat}", block, re.IGNORECASE)
+                    fuel_match = re.search(rf"(?:FSC-002|Fuel\s*(?:Surcharge|Allowance|FAF)?)[^\n\r]*\n?\s*\|?\s*{num_pat}", block, re.IGNORECASE)
+                    offload_match = re.search(rf"(?:OFL-003|Offloading|Loading|Handling)[^\n\r]*\n?\s*\|?\s*{num_pat}", block, re.IGNORECASE)
                     detention_match = re.search(rf"(?:Detention|Demurrage|Waiting\s*Time)[^\n\r]*\n?\s*\|?\s*{num_pat}", block, re.IGNORECASE)
                     subtotal_match = re.search(rf"SUBTOTAL\s*[:=]?\s*\n?\s*\|?\s*{num_pat}", block, re.IGNORECASE)
                     vat_match = re.search(rf"VAT\s*(?:\(\d+(?:\.\d+)?%\))?\s*[:=]?\s*\n?\s*\|?\s*{num_pat}", block, re.IGNORECASE)
@@ -503,7 +548,6 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
                     billed_vat = round(_parse_amount(vat_match.group(1)) * fx_mult, 2) if vat_match else 0.0
                     billed_total = round(_parse_amount(total_match.group(1)) * fx_mult, 2) if total_match else 0.0
 
-                    # Fallback if invoice is a single lump sum without itemized labels
                     if billed_base == 0.0:
                         raw_nums = re.findall(r"\b\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?\b|\b\d+\.\d{2}\b", block)
                         amounts = [round(_parse_amount(n) * fx_mult, 2) for n in raw_nums]
@@ -520,34 +564,10 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
                     if billed_total == 0.0:
                         billed_total = round(billed_subtotal + billed_vat, 2)
 
-                    suffix = f"_P{page_num}" if len(pdf.pages) > 1 else ""
-                    if len(blocks) > 1:
-                        suffix += f"_B{block_idx}"
-
-                    raw_inv = inv_match.group(1).strip() if inv_match else ""
-                    if raw_inv.lower() in {"", "bol", "ref", "no", "route", "truck", "bill"}:
-                        inv_fb = re.search(r"\b(INV-\d{4}-\d+)\b", block, re.IGNORECASE)
-                        invoice_id = inv_fb.group(1).strip() if inv_fb else f"{clean_fname}{suffix}"
-                    else:
-                        invoice_id = raw_inv if len(raw_inv) > 1 else f"{clean_fname}{suffix}"
-
-                    etims_serial = ""
-                    if etims_match:
-                        etims_serial = (etims_match.group(1) or etims_match.group(2) or "").strip()
-                    if not etims_serial:
-                        etims_serial = "MISSING_ETIMS_CU"
-                    etims_upper = etims_serial.upper()
-                    is_etims_valid = bool(etims_serial) and not (
-                        "MISSING" in etims_upper
-                        or "INVALID" in etims_upper
-                        or "PENDING" in etims_upper
-                        or etims_upper in {"N/A", "NONE"}
-                    )
-
                     records.append({
                         "Invoice_No": invoice_id,
-                        "Carrier": carrier_match.group(1).strip() if carrier_match else "Unknown Carrier",
-                        "BoL_Ref": bol_val if bol_val else "N/A",
+                        "Carrier": carrier_val,
+                        "BoL_Ref": bol_val,
                         "Route": route_val,
                         "Truck_ID": truck_match.group(1).strip() if truck_match else "N/A",
                         "Vehicle_Tonnage": float(tonnage_match.group(1)) if tonnage_match else 0.0,
@@ -590,85 +610,6 @@ def parse_pdf_invoice_universal(file_obj, usd_rate):
     return records
 
 
-def generate_pdf_debit_note(row_data):
-    buffer = BytesIO()
-    c = canvas.Canvas(buffer, pagesize=letter)
-    c.setFillColor(colors.HexColor("#0F172A"))
-    c.rect(0, 730, 612, 65, fill=1, stroke=0)
-    c.setFillColor(colors.white)
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(45, 755, "OFFICIAL DEBIT NOTE & AUDIT DISCREPANCY NOTICE")
-    c.setFont("Helvetica", 9)
-    c.drawString(45, 740, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')} | Enterprise Freight Audit Engine")
-
-    c.setFillColor(colors.black)
-    c.setFont("Helvetica-Bold", 11)
-    c.drawString(45, 700, f"Carrier: {row_data.get('Carrier', 'N/A')}")
-    c.drawString(45, 682, f"Invoice No: {row_data.get('Invoice_No', 'N/A')}   |   BoL Ref: {row_data.get('BoL_Ref', 'N/A')}")
-    c.drawString(45, 664, f"eTIMS CU Serial: {row_data.get('eTIMS_CU_Serial', 'N/A')}   |   Status: {row_data.get('Audit_Status', 'N/A')}")
-
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(45, 628, "Line-Item Financial Variance Breakdown (KES):")
-    c.setFont("Helvetica", 10)
-    lines = [
-        f"1. Base Freight: Billed KES {row_data.get('Billed_Base', 0.0):,.2f} vs Contract KES {row_data.get('Contract_Base', 0.0):,.2f} -> Overcharge: KES {row_data.get('Base_Overcharge', 0.0):,.2f}",
-        f"2. Fuel Surcharge: Billed KES {row_data.get('Billed_Fuel', 0.0):,.2f} vs Cap KES {row_data.get('Max_Fuel', 0.0):,.2f} -> Overcharge: KES {row_data.get('Fuel_Overcharge', 0.0):,.2f}",
-        f"3. Offloading / Handling: Billed KES {row_data.get('Billed_Offloading', 0.0):,.2f} vs Cap KES {row_data.get('Max_Offloading', 0.0):,.2f} -> Overcharge: KES {row_data.get('Offload_Overcharge', 0.0):,.2f}",
-        f"4. Detention & 3-Way GPS Penalty: KES {row_data.get('GPS_Penalty', 0.0):,.2f}",
-        f"5. FX Conversion Arbitrage Overcharge: KES {row_data.get('FX_Overcharge', 0.0):,.2f}",
-        f"6. VAT Adjustment (16% on Disallowed Charges): KES {row_data.get('VAT_Overcharge', 0.0):,.2f}",
-    ]
-    y = 605
-    for line in lines:
-        c.drawString(55, y, line)
-        y -= 18
-
-    c.setFont("Helvetica-Bold", 12)
-    c.setFillColor(colors.HexColor("#DC2626"))
-    c.drawString(45, y - 15, f"TOTAL CLAIMED DEBIT / DEDUCTION: KES {row_data.get('Total_Overcharge', 0.0):,.2f}")
-    c.setFillColor(colors.HexColor("#16A34A"))
-    c.drawString(45, y - 35, f"APPROVED NET PAYABLE AMOUNT: KES {row_data.get('Approved_Payable', 0.0):,.2f}")
-
-    c.showPage()
-    c.save()
-    buffer.seek(0)
-    return buffer
-
-
-def generate_short_pay_voucher_pdf(row_data):
-    """Generates a Remittance Advice & Short-Pay Authorization Voucher for Finance."""
-    buffer = BytesIO()
-    c = canvas.Canvas(buffer, pagesize=letter)
-    c.setFillColor(colors.HexColor("#1E3A8A"))
-    c.rect(0, 730, 612, 65, fill=1, stroke=0)
-    c.setFillColor(colors.white)
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(45, 755, "REMITTANCE ADVICE & SHORT-PAY AUTHORIZATION VOUCHER")
-    c.setFont("Helvetica", 9)
-    c.drawString(45, 740, "Self-Billing Accounts Payable Control Document | Verified Contract Settlement")
-
-    c.setFillColor(colors.black)
-    c.setFont("Helvetica-Bold", 11)
-    c.drawString(45, 695, f"Payee / Carrier: {row_data.get('Carrier', 'N/A')}")
-    c.drawString(45, 677, f"Invoice Reference: {row_data.get('Invoice_No', 'N/A')}   |   Waybill / BoL: {row_data.get('BoL_Ref', 'N/A')}")
-    c.drawString(45, 659, f"eTIMS Serial: {row_data.get('eTIMS_CU_Serial', 'N/A')}")
-
-    c.setFont("Helvetica", 11)
-    c.drawString(45, 620, f"Original Gross Invoice Billed:       KES {row_data.get('Billed_Total', 0.0):,.2f}")
-    c.drawString(45, 600, f"Less Audited Discrepancies & VAT:   -KES {row_data.get('Total_Overcharge', 0.0):,.2f}")
-    c.setFont("Helvetica-Bold", 13)
-    c.setFillColor(colors.HexColor("#15803D"))
-    c.drawString(45, 572, f"AUTHORIZED NET PAYMENT RELEASE:      KES {row_data.get('Approved_Payable', 0.0):,.2f}")
-
-    c.setFillColor(colors.HexColor("#475569"))
-    c.setFont("Helvetica", 9)
-    c.drawString(45, 535, "Note: Payment is remitted strictly per contracted tariff and GPS-verified delivery completion.")
-    c.showPage()
-    c.save()
-    buffer.seek(0)
-    return buffer
-
-
 def generate_batch_summary_pdf(df):
     buffer = BytesIO()
     doc = SimpleDocTemplate(
@@ -692,18 +633,14 @@ def generate_batch_summary_pdf(df):
 
     data = [["Invoice No", "Carrier", "BoL Ref", "Billed (KES)", "Overcharge (KES)", "Approved Pay (KES)", "Status"]]
     for _, row in df.iterrows():
-        inv_str = str(row.get("Invoice_No", "N/A"))
-        carrier_str = str(row.get("Carrier", "N/A"))
-        bol_str = str(row.get("BoL_Ref", "N/A"))
-        status_str = str(row.get("Audit_Status", "N/A"))
         data.append([
-            Paragraph(inv_str, cell_style),
-            Paragraph(carrier_str, cell_style),
-            Paragraph(bol_str, cell_style),
+            Paragraph(str(row.get("Invoice_No", "N/A")), cell_style),
+            Paragraph(str(row.get("Carrier", "N/A")), cell_style),
+            Paragraph(str(row.get("BoL_Ref", "N/A")), cell_style),
             f"{row.get('Billed_Total', 0.0):,.2f}",
             f"{row.get('Total_Overcharge', 0.0):,.2f}",
             f"{row.get('Approved_Payable', 0.0):,.2f}",
-            Paragraph(status_str, cell_style),
+            Paragraph(str(row.get("Audit_Status", "N/A")), cell_style),
         ])
 
     table = Table(data, colWidths=[115, 130, 105, 85, 85, 84, 120], repeatRows=1)
